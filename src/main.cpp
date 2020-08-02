@@ -5,26 +5,10 @@
 using namespace std;
 
 int main(){
-	Mmu mmu(32);
-
+	Mmu mmu(1024 * 1024 * 1024);
+	
 	try {
-		addr_t addr = mmu.alloc(30);
-		mmu.write(addr+8, 0x69);
-
-		Mmu copy = mmu.fork();
-		copy.write(addr, 5);
-		copy.write(addr+8, 0x12);
-
-		cout << mmu << endl;
-		cout << copy << endl;
-
-		copy.reset(mmu);
-		cout << mmu << endl;
-		cout << copy << endl;
-
-		printf("%X", mmu.read<int>(addr));
-		printf("%X", copy.read<int>(addr));
-
+		mmu.load_elf("../test_bins/xxd/xxd");
 	} catch (const Fault& f) {
 		cout << f << endl;
 	}

@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include "mmu.h"
 #include "common.h"
+#include "elf_parser.hpp"
 
 #define DIRTY_BLOCK_SIZE 64
 
@@ -169,12 +170,24 @@ void Mmu::reset(const Mmu& other){
 }
 
 void Mmu::load_elf(const char* pathname){
-	// TODO
+	Elf_parser elf_parser(pathname);
+	vector<segment_t> segs = elf_parser.get_segments();
+	for (const segment_t& s : segs){
+		if (s.segment_type != "LOAD")
+			continue;
+		printf("Loading at 0x%lX\n", s.segment_virtaddr);
+
+		if (s.segment_virtaddr + s.segment_memsize > memory_len)
+			die("Not enough space for loading elf (trying to load at 0x%lX, "
+				"max addr is 0x%lX)\n", s.segment_virtaddr, memory_len-1);
+
+		memcpy(memory+s.segment_virtaddr, s.data, s.segment_memsize);
+	}
 }
 
 ostream& operator<<(ostream& os, const Mmu& mmu){
 	os << hex;
-	for (int i = 0; i < mmu.memory_len; i++){
+	for (int i = 0x08048000; i < mmu.memory_len; i++){
 		if (i % 0x10 == 0)
 			os << endl << "0x" << setw(2) << setfill('0') << i << ": ";
 		os << setw(2) << setfill('0') << (uint64_t)mmu.memory[i] << " ";
