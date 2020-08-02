@@ -10,23 +10,34 @@
 It might be better registering separately dirty memory and dirty perms?
 
 Change almost every die with a exception
+
+Maybe reduce unnecesary sanity checks
 */
 
 // Type used for guest virtual addresses
 typedef size_t addr_t;
 
-enum FaultType{
-	Read,
-	Write,
-	Exec,
-	Uninit,
-	Miss
+// Fault: everything that will end the execution abruptly and will be considered
+// as a crash
+struct Fault : public std::exception {
+	enum Type {
+		Read,
+		Write,
+		Exec,
+		Uninit,
+		OutOfBounds,
+	};
+
+	Fault::Type type;
+	addr_t    fault_addr;
+
+	Fault(Fault::Type type, addr_t fault_addr):
+		type(type), fault_addr(fault_addr)
+		{}
+
+	friend std::ostream& operator<<(std::ostream& os, const Fault& f);
 };
 
-struct Fault: public std::exception{
-	FaultType type;
-	addr_t    addr;
-};
 
 class Mmu {
 	public:
@@ -53,6 +64,9 @@ class Mmu {
 
 		// Bitmap for every block, true if dirty
 		std::vector<bool>   dirty_bitmap;
+
+		// Checks if range is inside guest memory map
+		void check_bounds(addr_t addr, size_t len);
 
 		// Sets region from `addr` to `addr+len` as dirty
 		void set_dirty(addr_t addr, size_t len);

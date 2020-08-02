@@ -35,11 +35,16 @@ Mmu::~Mmu(){
 	delete[] perms;
 }
 
+void Mmu::check_bounds(addr_t addr, size_t len){
+	if (addr + len > memory_len)
+		throw Fault(Fault::Type::OutOfBounds, addr);
+		/*die("Out of bounds: accessing 0x%lX with len 0x%lX (size is "
+		    "0x%lX)", addr, len, memory_len);*/
+}
+
 void Mmu::set_dirty(addr_t addr, size_t len){
 	// Check out of bounds
-	if (addr + len > memory_len)
-		die("Out of bounds set_dirty: accessing 0x%lX with len 0x%lX (size is "
-		    "0x%lX)", addr, len, memory_len);
+	check_bounds(addr, len);
 
 	// Set dirty those blocks that arent dirty
 	size_t block_begin = addr/DIRTY_BLOCK_SIZE;
@@ -54,9 +59,7 @@ void Mmu::set_dirty(addr_t addr, size_t len){
 
 void Mmu::set_perms(addr_t addr, size_t len, uint8_t perm){
 	// Check out of bounds
-	if (addr + len > memory_len)
-		die("Out of bounds set_perms: accessing 0x%lX with len 0x%lX (size is "
-		    "0x%lX)", addr, len, memory_len);
+	check_bounds(addr, len);
 
 	// Set permissions
 	memset(perms+addr, perm, len);
@@ -67,7 +70,7 @@ void Mmu::set_perms(addr_t addr, size_t len, uint8_t perm){
 
 /*
 Asking for PERM_READ:
-	Address miss if it is not in bounds of the guest memory space
+	OutOfBounds if it is not in bounds of the guest memory space
 	Read fault if it hasnt PERM_READ (unallocated memory)
 	Uninit fault if it has PERM_READ but hasnt PERM_INIT (uninitialized memory)
 	Correct if it has both PERM_READ and PERM_INIT
@@ -82,22 +85,24 @@ void Mmu::check_perms(addr_t addr, size_t len, uint8_t perm){
 		if ((perms[addr] & perm) != perm){ 
 			// Permission error. Determine which
 			if (perm == PERM_WRITE)
-				die("Write fault accessing 0x%lX\n", addr);
+				throw Fault(Fault::Type::Write, addr);
+				//die("Write fault accessing 0x%lX\n", addr);
 			else if (perm == PERM_EXEC)
-				die("Exec fault accessing 0x%lX\n", addr);
+				throw Fault(Fault::Type::Exec, addr);
+				//die("Exec fault accessing 0x%lX\n", addr);
 			else if (perms[addr] & PERM_READ)
-				die("Uninit fault accessing 0x%lX\n", addr);
+				throw Fault(Fault::Type::Uninit, addr);
+				//die("Uninit fault accessing 0x%lX\n", addr);
 			else
-				die("Read fault accessing 0x%lX\n", addr);
+				throw Fault(Fault::Type::Read, addr);
+				//die("Read fault accessing 0x%lX\n", addr);
 		}
 	}
 }
 
 void Mmu::read_mem(void* dst, addr_t src, size_t len){
 	// Check out of bounds
-	if (src + len > memory_len)
-		die("Out of bounds read: accessing 0x%lX with len 0x%lX (size is "
-		    "0x%lX)", src, len, memory_len);
+	check_bounds(src, len);
 	
 	// Check perms
 	check_perms(src, len, PERM_READ);
@@ -108,9 +113,7 @@ void Mmu::read_mem(void* dst, addr_t src, size_t len){
 
 void Mmu::write_mem(addr_t dst, void* src, size_t len){
 	// Check out of bounds
-	if (dst + len > memory_len)
-		die("Out of bounds write: accessing 0x%lX with len 0x%lX (size is "
-		    "0x%lX)", dst, len, memory_len);
+	check_bounds(dst, len);
 
 	// Check perms
 	check_perms(dst, len, PERM_WRITE);
@@ -177,5 +180,27 @@ ostream& operator<<(ostream& os, const Mmu& mmu){
 		os << setw(2) << setfill('0') << (uint64_t)mmu.memory[i] << " ";
 	}
 	os << dec;
+	return os;
+}
+
+ostream& operator<<(ostream& os, const Fault& f){
+	switch (f.type){
+		case Fault::Type::Read:
+			os << "Read";
+			break;
+		case Fault::Type::Write:
+			os << "Write";
+			break;
+		case Fault::Type::Exec:
+			os << "Exec";
+			break;
+		case Fault::Type::Uninit:
+			os << "Uninit";
+			break;
+		case Fault::Type::OutOfBounds:
+			os << "OutOfBounds";
+			break;
+	}
+	os << " Fault, fault address = 0x" << hex << f.fault_addr << dec;
 	return os;
 }

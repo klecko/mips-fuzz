@@ -6,21 +6,26 @@ using namespace std;
 
 int main(){
 	Mmu mmu(32);
-	addr_t addr = mmu.alloc(30);
-	mmu.write(addr+8, 0x69);
 
-	Mmu copy = mmu.fork();
-	copy.write(addr, 5);
-	copy.write(addr+8, 0x12);
+	try {
+		addr_t addr = mmu.alloc(30);
+		mmu.write(addr+8, 0x69);
 
-	cout << mmu << endl;
-	cout << copy << endl;
+		Mmu copy = mmu.fork();
+		copy.write(addr, 5);
+		copy.write(addr+8, 0x12);
 
-	copy.reset(mmu);
-	cout << mmu << endl;
-	cout << copy << endl;
+		cout << mmu << endl;
+		cout << copy << endl;
 
-	printf("%X", mmu.read<int>(addr));
-	printf("%X", copy.read<int>(addr));
-	
+		copy.reset(mmu);
+		cout << mmu << endl;
+		cout << copy << endl;
+
+		printf("%X", mmu.read<int>(addr));
+		printf("%X", copy.read<int>(addr));
+
+	} catch (const Fault& f) {
+		cout << f << endl;
+	}
 }
