@@ -103,6 +103,7 @@ class Elf_parser {
         Elf_parser (const std::string &program_path): m_program_path{program_path} {   
             load_memory_map();
         }
+        long get_entry();
         std::vector<section_t> get_sections();
         std::vector<segment_t> get_segments();
         std::vector<symbol_t> get_symbols();

@@ -23,7 +23,9 @@
 #include "elf_parser.hpp"
 
 
-
+long Elf_parser::get_entry() {
+    return ((Elf_Ehdr*)m_mmap_program)->e_entry;
+}
 
 std::vector<section_t> Elf_parser::get_sections() {
     Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;

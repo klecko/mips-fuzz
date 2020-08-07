@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <bitset>
 #include <vector>
+#include "elf_parser.hpp"
 
 /*
 It might be better registering separately dirty memory and dirty perms?
@@ -29,7 +30,7 @@ struct Fault : public std::exception {
 	};
 
 	Fault::Type type;
-	addr_t    fault_addr;
+	addr_t      fault_addr;
 
 	Fault(Fault::Type type, addr_t fault_addr):
 		type(type), fault_addr(fault_addr)
@@ -47,8 +48,6 @@ class Mmu {
 		static const uint8_t PERM_INIT  = (1 << 3); // Has been initialized
 
 	private:
-		Mmu& operator=(const Mmu& other){};
-
 		// Guest virtual memory
 		uint8_t* memory;
 		size_t   memory_len;
@@ -77,7 +76,7 @@ class Mmu {
 
 		// Checks that all bytes from `addr` to `addr+len` have `perm`
 		// permission. `perm` should be PERM_READ, PERM_WRITE or PERM_EXEC.
-		// It will throw an exception is permissions are not fulfilled.
+		// It will throw an exception if permissions are not fulfilled.
 		// Doesn't check out of bounds
 		void check_perms(addr_t addr, size_t len, uint8_t perm);
 
@@ -88,11 +87,19 @@ class Mmu {
 		void write_mem(addr_t dst, void* src, size_t len);
 
 	public:
+		Mmu();
+
 		Mmu(size_t mem_size);
 
 		Mmu(const Mmu& other);
 
+		Mmu(Mmu&& other) noexcept;
+
 		~Mmu();
+
+		friend void swap(Mmu& first, Mmu& second);
+
+		Mmu& operator=(Mmu other);
 
 		// Allocates a block of `size` bytes. Default perms are RW
 		addr_t alloc(size_t size);
@@ -111,7 +118,7 @@ class Mmu {
 		// Resets the Mmu to the parent which has previously been forked from
 		void reset(const Mmu& other);
 
-		void load_elf(const char* pathname);
+		void load_elf(const std::vector<segment_t>& segments);
 
 		// Hexdumps the memory
 		friend std::ostream& operator<<(std::ostream& os, const Mmu& mmu);

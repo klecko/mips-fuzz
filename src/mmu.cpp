@@ -10,6 +10,13 @@
 
 using namespace std;
 
+Mmu::Mmu(){
+	memory     = NULL;
+	memory_len = 0;
+	perms      = NULL;
+	next_alloc = 0;
+} 
+
 Mmu::Mmu(size_t mem_size){
 	memory     = new uint8_t[mem_size];
 	memory_len = mem_size;
@@ -21,19 +28,38 @@ Mmu::Mmu(size_t mem_size){
 }
 
 Mmu::Mmu(const Mmu& other){
-	memory_len = other.memory_len;
-	memory     = new uint8_t[memory_len];
-	perms      = new uint8_t[memory_len];
-	memcpy(memory, other.memory, memory_len);
-	memcpy(perms, other.perms, memory_len);
+	memory_len   = other.memory_len;
+	memory       = new uint8_t[memory_len];
+	perms        = new uint8_t[memory_len];
 	next_alloc   = other.next_alloc;
 	dirty_blocks = vector<addr_t>(other.dirty_blocks);
 	dirty_bitmap = vector<bool>(other.dirty_bitmap);
+	memcpy(memory, other.memory, memory_len);
+	memcpy(perms, other.perms, memory_len);
+}
+
+Mmu::Mmu(Mmu&& other) noexcept : Mmu(){
+	swap(*this, other);
 }
 
 Mmu::~Mmu(){
 	delete[] memory;
 	delete[] perms;
+}
+
+Mmu& Mmu::operator=(Mmu other){
+	swap(*this, other);
+	return *this;
+}
+
+void swap(Mmu& first, Mmu& second){
+	using std::swap;
+	swap(first.memory, second.memory);
+	swap(first.memory_len, second.memory_len);
+	swap(first.perms, second.perms);
+	swap(first.next_alloc, second.next_alloc);
+	swap(first.dirty_blocks, second.dirty_blocks);
+	swap(first.dirty_bitmap, second.dirty_bitmap);
 }
 
 void Mmu::check_bounds(addr_t addr, size_t len){
@@ -87,16 +113,12 @@ void Mmu::check_perms(addr_t addr, size_t len, uint8_t perm){
 			// Permission error. Determine which
 			if (perm == PERM_WRITE)
 				throw Fault(Fault::Type::Write, addr);
-				//die("Write fault accessing 0x%lX\n", addr);
 			else if (perm == PERM_EXEC)
 				throw Fault(Fault::Type::Exec, addr);
-				//die("Exec fault accessing 0x%lX\n", addr);
 			else if (perms[addr] & PERM_READ)
 				throw Fault(Fault::Type::Uninit, addr);
-				//die("Uninit fault accessing 0x%lX\n", addr);
 			else
 				throw Fault(Fault::Type::Read, addr);
-				//die("Read fault accessing 0x%lX\n", addr);
 		}
 	}
 }
@@ -169,10 +191,8 @@ void Mmu::reset(const Mmu& other){
 	next_alloc = other.next_alloc;
 }
 
-void Mmu::load_elf(const char* pathname){
-	Elf_parser elf_parser(pathname);
-	vector<segment_t> segs = elf_parser.get_segments();
-	for (const segment_t& s : segs){
+void Mmu::load_elf(const vector<segment_t>& segments){
+	for (const segment_t& s : segments){
 		if (s.segment_type != "LOAD")
 			continue;
 		printf("Loading at 0x%lX\n", s.segment_virtaddr);
@@ -181,7 +201,23 @@ void Mmu::load_elf(const char* pathname){
 			die("Not enough space for loading elf (trying to load at 0x%lX, "
 				"max addr is 0x%lX)\n", s.segment_virtaddr, memory_len-1);
 
-		memcpy(memory+s.segment_virtaddr, s.data, s.segment_memsize);
+		// Copy data into memory
+		memcpy(memory+s.segment_virtaddr, s.data, s.segment_filesize);
+
+		// Set padding
+		if (s.segment_memsize > s.segment_filesize)
+			memset(memory + s.segment_virtaddr + s.segment_filesize,
+				0, s.segment_memsize - s.segment_filesize);
+
+		// Set permissions
+		uint8_t perm = PERM_INIT;
+		if (s.segment_flags.find("R") != string::npos)
+			perm |= PERM_READ;
+		if (s.segment_flags.find("W") != string::npos)
+			perm |= PERM_WRITE;
+		if (s.segment_flags.find("X") != string::npos)
+			perm |= PERM_EXEC;
+		set_perms(s.segment_virtaddr, s.segment_memsize, perm);
 	}
 }
 

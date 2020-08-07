@@ -1,6 +1,7 @@
 # The most simplistic Makefile
 
-CFLAGS += -m32 -static
+CC = mipsel-linux-gnu-gcc-9
+CFLAGS += -static
 
 xxd: xxd.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -DUNIX -o xxd xxd.c
