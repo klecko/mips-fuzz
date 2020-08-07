@@ -10,13 +10,13 @@
 /*
 It might be better registering separately dirty memory and dirty perms?
 
-Change almost every die with a exception
-
 Maybe reduce unnecesary sanity checks
+
+Solve inconsistency between addr_t and size_t
 */
 
 // Type used for guest virtual addresses
-typedef size_t addr_t;
+typedef uint32_t addr_t;
 
 // Fault: everything that will end the execution abruptly and will be considered
 // as a crash
