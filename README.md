@@ -1,1 +1,1 @@
-Attempt of emulation fuzzing with snapshots
+Attempt of MIPS32 emulation fuzzing with snapshots
