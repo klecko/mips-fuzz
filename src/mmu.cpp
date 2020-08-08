@@ -17,7 +17,7 @@ Mmu::Mmu(){
 	next_alloc = 0;
 } 
 
-Mmu::Mmu(size_t mem_size){
+Mmu::Mmu(vsize_t mem_size){
 	memory     = new uint8_t[mem_size];
 	memory_len = mem_size;
 	perms      = new uint8_t[mem_size];
@@ -32,7 +32,7 @@ Mmu::Mmu(const Mmu& other){
 	memory       = new uint8_t[memory_len];
 	perms        = new uint8_t[memory_len];
 	next_alloc   = other.next_alloc;
-	dirty_blocks = vector<addr_t>(other.dirty_blocks);
+	dirty_blocks = vector<vaddr_t>(other.dirty_blocks);
 	dirty_bitmap = vector<bool>(other.dirty_bitmap);
 	memcpy(memory, other.memory, memory_len);
 	memcpy(perms, other.perms, memory_len);
@@ -62,21 +62,21 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.dirty_bitmap, second.dirty_bitmap);
 }
 
-void Mmu::check_bounds(addr_t addr, size_t len){
+void Mmu::check_bounds(vaddr_t addr, vsize_t len){
 	if (addr + len > memory_len)
 		throw Fault(Fault::Type::OutOfBounds, addr);
 		/*die("Out of bounds: accessing 0x%lX with len 0x%lX (size is "
 		    "0x%lX)", addr, len, memory_len);*/
 }
 
-void Mmu::set_dirty(addr_t addr, size_t len){
+void Mmu::set_dirty(vaddr_t addr, vsize_t len){
 	// Check out of bounds
 	check_bounds(addr, len);
 
 	// Set dirty those blocks that arent dirty
-	size_t block_begin = addr/DIRTY_BLOCK_SIZE;
-	size_t block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1;
-	for (size_t block = block_begin; block < block_end; block++){
+	vsize_t block_begin = addr/DIRTY_BLOCK_SIZE;
+	vsize_t block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1;
+	for (vsize_t block = block_begin; block < block_end; block++){
 		if (!dirty_bitmap[block]){
 			dirty_blocks.push_back(block);
 			dirty_bitmap[block] = true;
@@ -84,7 +84,7 @@ void Mmu::set_dirty(addr_t addr, size_t len){
 	} 
 }
 
-void Mmu::set_perms(addr_t addr, size_t len, uint8_t perm){
+void Mmu::set_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 	// Check out of bounds
 	check_bounds(addr, len);
 
@@ -102,12 +102,12 @@ Asking for PERM_READ:
 	Uninit fault if it has PERM_READ but hasnt PERM_INIT (uninitialized memory)
 	Correct if it has both PERM_READ and PERM_INIT
 */
-void Mmu::check_perms(addr_t addr, size_t len, uint8_t perm){
+void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 	// Checking for reading implies checking for initialized memory
 	if (perm == PERM_READ)
 		perm |= PERM_INIT;
 
-	addr_t addr_end = addr + len;
+	vaddr_t addr_end = addr + len;
 	for (; addr < addr_end; addr++){
 		if ((perms[addr] & perm) != perm){ 
 			// Permission error. Determine which
@@ -123,7 +123,7 @@ void Mmu::check_perms(addr_t addr, size_t len, uint8_t perm){
 	}
 }
 
-void Mmu::read_mem(void* dst, addr_t src, size_t len){
+void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len){
 	// Check out of bounds
 	check_bounds(src, len);
 	
@@ -134,7 +134,7 @@ void Mmu::read_mem(void* dst, addr_t src, size_t len){
 	memcpy(dst, memory+src, len);
 }
 
-void Mmu::write_mem(addr_t dst, const void* src, size_t len){
+void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	// Check out of bounds
 	check_bounds(dst, len);
 
@@ -152,13 +152,13 @@ void Mmu::write_mem(addr_t dst, const void* src, size_t len){
 	memcpy(memory+dst, src, len);
 }
 
-addr_t Mmu::alloc(size_t size){
+vaddr_t Mmu::alloc(vsize_t size){
 	// Check out of memory
 	if (next_alloc + size > memory_len)
-		die("Out of memory allocating 0x%lX bytes", size);
+		die("Out of memory allocating 0x%X bytes", size);
 
-	size_t aligned_size  = (size + 0xF) & (!0xF);
-	addr_t current_alloc = next_alloc;
+	vaddr_t aligned_size  = size + 0xF & ~0xF;
+	vaddr_t current_alloc = next_alloc;
 
 	// Memory is by default readable and writable, but not initialized
 	set_perms(current_alloc, size, PERM_READ|PERM_WRITE);
@@ -180,10 +180,10 @@ Mmu Mmu::fork(){
 
 void Mmu::reset(const Mmu& other){
 	// Reset memory and perms for every dirty block
-	for (size_t block : dirty_blocks){
-		addr_t addr = block*DIRTY_BLOCK_SIZE;
-		memcpy(memory+addr, other.memory+addr, DIRTY_BLOCK_SIZE);
-		memcpy(perms+addr, other.perms+addr, DIRTY_BLOCK_SIZE);
+	for (vsize_t block : dirty_blocks){
+		vaddr_t addr = block*DIRTY_BLOCK_SIZE;
+		memcpy(memory + addr, other.memory + addr, DIRTY_BLOCK_SIZE);
+		memcpy(perms  + addr, other.perms  + addr, DIRTY_BLOCK_SIZE);
 		dirty_bitmap[block] = false;
 	}
 
@@ -195,11 +195,11 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 	for (const segment_t& s : segments){
 		if (s.segment_type != "LOAD")
 			continue;
-		printf("Loading at 0x%lX\n", s.segment_virtaddr);
+		printf("Loading at 0x%X\n", s.segment_virtaddr);
 
 		if (s.segment_virtaddr + s.segment_memsize > memory_len)
-			die("Not enough space for loading elf (trying to load at 0x%lX, "
-				"max addr is 0x%lX)\n", s.segment_virtaddr, memory_len-1);
+			die("Not enough space for loading elf (trying to load at 0x%X, "
+				"max addr is 0x%X)\n", s.segment_virtaddr, memory_len-1);
 
 		// Copy data into memory
 		memcpy(memory+s.segment_virtaddr, s.data, s.segment_filesize);
@@ -219,9 +219,10 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 			perm |= PERM_EXEC;
 		set_perms(s.segment_virtaddr, s.segment_memsize, perm);
 
-		// Update next allocation beyond any section we load
-		next_alloc = max(next_alloc, (addr_t)((s.segment_virtaddr
-		                              + s.segment_memsize  + 0xFFF) & !0xFFF));
+		// Update next allocation beyond any segment we load
+		vaddr_t segm_next_page = 
+			s.segment_virtaddr + s.segment_memsize + 0xFFF & ~0xFFF;
+		next_alloc = max(next_alloc, segm_next_page);
 	}
 }
 

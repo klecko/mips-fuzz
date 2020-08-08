@@ -12,10 +12,10 @@ class Emulator {
 
 		uint32_t  regs[32];
 		uint32_t  hi, lo;
-		addr_t    pc;
+		vaddr_t   pc;
 
 		bool      condition;
-		addr_t    jump_addr;
+		vaddr_t   jump_addr;
 
 		void handle_syscall(uint32_t syscall);
 
@@ -24,12 +24,12 @@ class Emulator {
 	public:
 		//Emulator();
 
-		Emulator(size_t mem_size);
+		Emulator(vsize_t mem_size);
 
 		void set_reg(uint8_t reg, uint32_t val);
 		uint32_t get_reg(uint8_t reg);
 
-		void set_pc(addr_t addr);
+		void set_pc(vaddr_t addr);
 		uint32_t get_pc();
 
 		Emulator fork();
@@ -46,9 +46,11 @@ class Emulator {
 		static const inst_handler inst_handlers[];
 		static const inst_handler inst_handlers_R[];
 		static const inst_handler inst_handlers_RI[];
+		static const inst_handler inst_handlers_special2[];
 
 		void inst_R(uint32_t);
 		void inst_RI(uint32_t);
+		void inst_special2(uint32_t);
 
 		void inst_test(uint32_t);
 		void inst_unimplemented(uint32_t);
@@ -68,6 +70,18 @@ class Emulator {
 		void inst_jr(uint32_t);
 		void inst_lhu(uint32_t);
 		void inst_syscall(uint32_t);
+		void inst_xor(uint32_t);
+		void inst_sltu(uint32_t);
+		void inst_sltiu(uint32_t);
+		void inst_movn(uint32_t);
+		void inst_movz(uint32_t);
+		void inst_subu(uint32_t);
+		void inst_teq(uint32_t);
+		void inst_divu(uint32_t);
+		void inst_mflo(uint32_t);
+		void inst_mul(uint32_t);
+		void inst_bltz(uint32_t);
+		void inst_blez(uint32_t);
 };
 
 struct inst_R_t {

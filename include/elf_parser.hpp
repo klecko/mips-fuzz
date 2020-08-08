@@ -68,6 +68,14 @@
 #define ELFCLASS ELFCLASS64
 #endif
 
+// CHAPUZA
+
+// Type used for guest virtual addresses
+typedef uint32_t vaddr_t;
+
+// Type used for indexing guest virtual address
+typedef vaddr_t vsize_t;
+
 
 typedef struct {
     int section_index = 0; 
@@ -79,7 +87,8 @@ typedef struct {
 
 typedef struct {
     std::string segment_type, segment_flags;
-    long segment_offset, segment_virtaddr, segment_physaddr, segment_filesize, segment_memsize;
+    vaddr_t segment_offset, segment_virtaddr, segment_physaddr;
+    vsize_t segment_filesize, segment_memsize;
     int segment_align;
     void* data;
 } segment_t;

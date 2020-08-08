@@ -12,11 +12,14 @@ It might be better registering separately dirty memory and dirty perms?
 
 Maybe reduce unnecesary sanity checks
 
-Solve inconsistency between addr_t and size_t
+Solve chapuza of typedefs in elf_parser.hpp
 */
 
 // Type used for guest virtual addresses
-typedef uint32_t addr_t;
+typedef uint32_t vaddr_t;
+
+// Type used for indexing guest virtual address
+typedef vaddr_t vsize_t;
 
 // Fault: everything that will end the execution abruptly and will be considered
 // as a crash
@@ -32,9 +35,9 @@ struct Fault : public std::exception {
 	};
 
 	Fault::Type type;
-	addr_t      fault_addr;
+	vaddr_t     fault_addr;
 
-	Fault(Fault::Type type, addr_t fault_addr):
+	Fault(Fault::Type type, vaddr_t fault_addr):
 		type(type), fault_addr(fault_addr)
 		{}
 
@@ -52,40 +55,40 @@ class Mmu {
 	private:
 		// Guest virtual memory
 		uint8_t* memory;
-		size_t   memory_len;
+		vsize_t  memory_len;
 
 		// Byte-level permissions for guest virtual memory
 		uint8_t* perms;
 
 		// Next allocation returned by `alloc`
-		addr_t   next_alloc;
+		vaddr_t  next_alloc;
 
 		// Holds the index of every dirty block
-		std::vector<addr_t> dirty_blocks;
+		std::vector<vaddr_t> dirty_blocks;
 
 		// Bitmap for every block, true if dirty
-		std::vector<bool>   dirty_bitmap;
+		std::vector<bool>    dirty_bitmap;
 
 		// Checks if range is inside guest memory map
-		void check_bounds(addr_t addr, size_t len);
+		void check_bounds(vaddr_t addr, vsize_t len);
 
 		// Sets region from `addr` to `addr+len` as dirty
-		void set_dirty(addr_t addr, size_t len);
+		void set_dirty(vaddr_t addr, vsize_t len);
 
 		// Set permissions `perm` from `addr` to `addr+len`
 		// Updates dirty
-		void set_perms(addr_t addr, size_t len, uint8_t perm);
+		void set_perms(vaddr_t addr, vsize_t len, uint8_t perm);
 
 		// Checks that all bytes from `addr` to `addr+len` have `perm`
 		// permission. `perm` should be PERM_READ, PERM_WRITE or PERM_EXEC.
 		// It will throw an exception if permissions are not fulfilled.
 		// Doesn't check out of bounds
-		void check_perms(addr_t addr, size_t len, uint8_t perm);
+		void check_perms(vaddr_t addr, vsize_t len, uint8_t perm);
 
 	public:
 		Mmu();
 
-		Mmu(size_t mem_size);
+		Mmu(vsize_t mem_size);
 
 		Mmu(const Mmu& other);
 
@@ -98,21 +101,21 @@ class Mmu {
 		Mmu& operator=(Mmu other);
 
 		// Allocates a block of `size` bytes. Default perms are RW
-		addr_t alloc(size_t size);
+		vaddr_t alloc(vsize_t size);
 
 		// Read `len` bytes from virtual addr `src` into `dst` checking perms
-		void read_mem(void* dst, addr_t src, size_t len);
+		void read_mem(void* dst, vaddr_t src, vsize_t len);
 
 		// Write `len` bytes from `src` into virtual addr `dst` checking perms
-		void write_mem(addr_t dst, const void* src, size_t len);
+		void write_mem(vaddr_t dst, const void* src, vsize_t len);
 
 		// Reads a value from memory checking perms and misalignment
 		template <class T>
-		T read(addr_t addr);
+		T read(vaddr_t addr);
 
 		// Writes a value to memory checking perms and misalignment
 		template <class T>
-		void write(addr_t addr, T value);
+		void write(vaddr_t addr, T value);
 
 		// Forks the Mmu and returns the child
 		Mmu fork();
@@ -127,7 +130,7 @@ class Mmu {
 };
 
 template<class T>
-T Mmu::read(addr_t addr){
+T Mmu::read(vaddr_t addr){
 	if (addr % sizeof(T) != 0)
 		throw Fault(Fault::Type::MisalignedRead, addr);
 	T result;
@@ -136,7 +139,7 @@ T Mmu::read(addr_t addr){
 }
 
 template<class T>
-void Mmu::write(addr_t addr, T value){
+void Mmu::write(vaddr_t addr, T value){
 	if (addr % sizeof(T) != 0)
 		throw Fault(Fault::Type::MisalignedWrite, addr);
 	write_mem(addr, &value, sizeof(T));
