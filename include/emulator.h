@@ -3,6 +3,8 @@
 
 #include "mmu.h"
 
+// Implement prefetch properly
+
 class Emulator;
 typedef void (Emulator::*const inst_handler)(uint32_t);
 
@@ -20,10 +22,6 @@ class Emulator {
 		// jump_addr in next cycle
 		bool      condition;
 		vaddr_t   jump_addr;
-
-		// Virtual addresses of data segment beginning and end. Used by sys_brk
-		vaddr_t  data_segm;
-		vaddr_t  brk;
 
 		uint32_t sys_brk(vaddr_t addr);
 		void handle_syscall(uint32_t syscall);
@@ -44,7 +42,7 @@ class Emulator {
 		// Forks the emulator and returns the child
 		Emulator fork();
 
-		// Resets the emulator to the parent it has previously been forked from
+		// Resets the emulator to the parent it was previously forked from
 		void reset(const Emulator& other);
 
 		// Load elf into memory, allocate stack and load argv into the stack
@@ -59,10 +57,12 @@ class Emulator {
 		static const inst_handler inst_handlers_R[];
 		static const inst_handler inst_handlers_RI[];
 		static const inst_handler inst_handlers_special2[];
+		static const inst_handler inst_handlers_special3[];
 
 		void inst_R(uint32_t);
 		void inst_RI(uint32_t);
 		void inst_special2(uint32_t);
+		void inst_special3(uint32_t);
 
 		void inst_test(uint32_t);
 		void inst_unimplemented(uint32_t);
@@ -94,6 +94,13 @@ class Emulator {
 		void inst_mul(uint32_t);
 		void inst_bltz(uint32_t);
 		void inst_blez(uint32_t);
+		void inst_rdhwr(uint32_t);
+		void inst_bgez(uint32_t);
+		void inst_slti(uint32_t);
+		void inst_andi(uint32_t);
+		void inst_ori(uint32_t);
+		void inst_xori(uint32_t);
+		void inst_pref(uint32_t);
 };
 
 struct inst_R_t {

@@ -63,6 +63,12 @@ class Mmu {
 		// Next allocation returned by `alloc`
 		vaddr_t  next_alloc;
 
+		// Brk virtual addr, set when an ELF is loaded
+		vaddr_t  brk;
+
+		// Virtual address of thread local storage, if allocated
+		vaddr_t  tls;
+
 		// Virtual address of the top of the stack region, if allocated
 		// Don't confuse with emulator stack pointer
 		vaddr_t  stack;
@@ -104,7 +110,14 @@ class Mmu {
 
 		Mmu& operator=(Mmu other);
 
-		// Allocates a block of `size` bytes. Default perms are RW
+		// Attempt to set `brk` to `new_brk`. Checks out of memory
+		void set_brk(vaddr_t new_brk);
+
+		vaddr_t get_brk();
+
+		vaddr_t get_tls();
+
+		// Allocates a block of `size` bytes from the heap. Default perms are RW
 		vaddr_t alloc(vsize_t size);
 
 		// Allocates a stack at the end of the guest memory space
@@ -125,10 +138,10 @@ class Mmu {
 		template <class T>
 		void write(vaddr_t addr, T value);
 
-		// Forks the Mmu and returns the child
+		// Forks the mmu and returns the child
 		Mmu fork();
 
-		// Resets the Mmu to the parent it has previously been forked from
+		// Resets the mmu to the parent it was previously forked from
 		void reset(const Mmu& other);
 
 		// Load elf segments into memory and update `next_alloc` beyond them

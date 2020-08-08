@@ -15,6 +15,8 @@ Mmu::Mmu(){
 	memory_len = 0;
 	perms      = NULL;
 	next_alloc = 0;
+	brk        = 0;
+	tls        = 0;
 	stack      = 0;
 } 
 
@@ -23,6 +25,8 @@ Mmu::Mmu(vsize_t mem_size){
 	memory_len = mem_size;
 	perms      = new uint8_t[mem_size];
 	next_alloc = 0;
+	brk        = 0;
+	tls        = 0;
 	stack      = 0;
 	dirty_bitmap.resize(memory_len/DIRTY_BLOCK_SIZE + 1, false);
 	memset(memory, 0, mem_size);
@@ -34,6 +38,8 @@ Mmu::Mmu(const Mmu& other){
 	memory       = new uint8_t[memory_len];
 	perms        = new uint8_t[memory_len];
 	next_alloc   = other.next_alloc;
+	brk          = other.brk;
+	tls          = other.tls;
 	stack        = other.stack;
 	dirty_blocks = vector<vaddr_t>(other.dirty_blocks);
 	dirty_bitmap = vector<bool>(other.dirty_bitmap);
@@ -61,9 +67,32 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.memory_len, second.memory_len);
 	swap(first.perms, second.perms);
 	swap(first.next_alloc, second.next_alloc);
+	swap(first.brk, second.brk);
+	swap(first.tls, second.tls);
 	swap(first.stack, second.stack);
 	swap(first.dirty_blocks, second.dirty_blocks);
 	swap(first.dirty_bitmap, second.dirty_bitmap);
+}
+
+void Mmu::set_brk(vaddr_t new_brk){
+	// Check out of memory
+	if (new_brk > stack)
+		die("Out of memory: attempt to set brk to 0x%X, stack top is 0x%X\n", 
+		    new_brk, stack);
+
+	// We don't reduce it for now
+	if (new_brk < brk)
+		die("Attempt to reduce brk\n");
+	
+	brk = new_brk;
+}
+
+vaddr_t Mmu::get_brk(){
+	return brk;
+}
+
+vaddr_t Mmu::get_tls(){
+	return tls;
 }
 
 void Mmu::check_bounds(vaddr_t addr, vsize_t len){
@@ -156,8 +185,7 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 
 vaddr_t Mmu::alloc(vsize_t size){
 	// Check out of memory
-	vaddr_t alloc_limit = (stack ? stack : memory_len);
-	if (next_alloc + size > alloc_limit)
+	if (next_alloc + size > brk)
 		die("Out of memory allocating 0x%X bytes\n", size);
 
 	vsize_t aligned_size  = size + 0xF & ~0xF;
@@ -211,39 +239,55 @@ void Mmu::reset(const Mmu& other){
 	next_alloc = other.next_alloc;
 }
 
+uint8_t parse_perm(const string& flag){
+	uint8_t perm = Mmu::PERM_INIT;
+	if (flag.find("R") != string::npos)
+		perm |= Mmu::PERM_READ;
+	if (flag.find("W") != string::npos)
+		perm |= Mmu::PERM_WRITE;
+	if (flag.find("X") != string::npos)
+		perm |= Mmu::PERM_EXEC;
+	return perm;
+}
+
 void Mmu::load_elf(const vector<segment_t>& segments){
 	for (const segment_t& s : segments){
-		if (s.segment_type != "LOAD")
-			continue;
-		printf("Loading at 0x%X\n", s.segment_virtaddr);
+		if (s.segment_type == "TLS"){
+			// TLS is included in one of the LOAD segments, no need to load it,
+			// but it seems to have different perms?
+			// Maybe I have to do that with the others segments too
+			tls = s.segment_virtaddr;
+			uint8_t perm = parse_perm(s.segment_flags);
+			set_perms(s.segment_virtaddr, s.segment_memsize, perm);
+			
+		} else if (s.segment_type == "LOAD"){
+			printf("Loading at 0x%X\n", s.segment_virtaddr);
 
-		if (s.segment_virtaddr + s.segment_memsize > memory_len)
-			die("Not enough space for loading elf (trying to load at 0x%X, "
-				"max addr is 0x%X)\n", s.segment_virtaddr, memory_len-1);
+			if (s.segment_virtaddr + s.segment_memsize > memory_len)
+				die("Not enough space for loading elf (trying to load at 0x%X, "
+					"max addr is 0x%X)\n", s.segment_virtaddr, memory_len-1);
 
-		// Copy data into memory
-		memcpy(memory+s.segment_virtaddr, s.data, s.segment_filesize);
+			// Copy data into memory
+			memcpy(memory+s.segment_virtaddr, s.data, s.segment_filesize);
 
-		// Set padding
-		if (s.segment_memsize > s.segment_filesize)
-			memset(memory + s.segment_virtaddr + s.segment_filesize,
-				0, s.segment_memsize - s.segment_filesize);
+			// Set padding
+			if (s.segment_memsize > s.segment_filesize)
+				memset(memory + s.segment_virtaddr + s.segment_filesize,
+					0, s.segment_memsize - s.segment_filesize);
 
-		// Set permissions
-		uint8_t perm = PERM_INIT;
-		if (s.segment_flags.find("R") != string::npos)
-			perm |= PERM_READ;
-		if (s.segment_flags.find("W") != string::npos)
-			perm |= PERM_WRITE;
-		if (s.segment_flags.find("X") != string::npos)
-			perm |= PERM_EXEC;
-		set_perms(s.segment_virtaddr, s.segment_memsize, perm);
+			// Set permissions
+			uint8_t perm = parse_perm(s.segment_flags);
+			set_perms(s.segment_virtaddr, s.segment_memsize, perm);
 
-		// Update next allocation beyond any segment we load
-		vaddr_t segm_next_page = 
-			s.segment_virtaddr + s.segment_memsize + 0xFFF & ~0xFFF;
-		next_alloc = max(next_alloc, segm_next_page);
+			// Brk addr is the page beyond the data segment, which is the last one
+			vaddr_t segm_next_page = 
+				s.segment_virtaddr + s.segment_memsize + 0xFFF & ~0xFFF;
+			brk = max(brk, segm_next_page);
+		}
 	}
+	// Set next allocation to brk. Brk will be extended to allow allocations
+	// (probably?)
+	next_alloc = brk;
 }
 
 ostream& operator<<(ostream& os, const Mmu& mmu){
