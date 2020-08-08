@@ -27,6 +27,8 @@ struct Fault : public std::exception {
 		Exec,
 		Uninit,
 		OutOfBounds,
+		MisalignedRead,
+		MisalignedWrite,
 	};
 
 	Fault::Type type;
@@ -80,12 +82,6 @@ class Mmu {
 		// Doesn't check out of bounds
 		void check_perms(addr_t addr, size_t len, uint8_t perm);
 
-		// Read `len` bytes from virtual addr `src` into `dst` checking perms
-		void read_mem(void* dst, addr_t src, size_t len);
-
-		// Write `len` bytes from `src` into virtual addr `dst` checking perms
-		void write_mem(addr_t dst, void* src, size_t len);
-
 	public:
 		Mmu();
 
@@ -104,11 +100,17 @@ class Mmu {
 		// Allocates a block of `size` bytes. Default perms are RW
 		addr_t alloc(size_t size);
 
-		// Reads a value from memory
+		// Read `len` bytes from virtual addr `src` into `dst` checking perms
+		void read_mem(void* dst, addr_t src, size_t len);
+
+		// Write `len` bytes from `src` into virtual addr `dst` checking perms
+		void write_mem(addr_t dst, const void* src, size_t len);
+
+		// Reads a value from memory checking perms and misalignment
 		template <class T>
 		T read(addr_t addr);
 
-		// Writes a value to memory
+		// Writes a value to memory checking perms and misalignment
 		template <class T>
 		void write(addr_t addr, T value);
 
@@ -126,6 +128,8 @@ class Mmu {
 
 template<class T>
 T Mmu::read(addr_t addr){
+	if (addr % sizeof(addr) != 0)
+		throw Fault(Fault::Type::MisalignedRead, addr);
 	T result;
 	read_mem(&result, addr, sizeof(T));
 	return result;
@@ -133,6 +137,8 @@ T Mmu::read(addr_t addr){
 
 template<class T>
 void Mmu::write(addr_t addr, T value){
+	if (addr % sizeof(addr) != 0)
+		throw Fault(Fault::Type::MisalignedWrite, addr);
 	write_mem(addr, &value, sizeof(T));
 }
 

@@ -134,7 +134,7 @@ void Mmu::read_mem(void* dst, addr_t src, size_t len){
 	memcpy(dst, memory+src, len);
 }
 
-void Mmu::write_mem(addr_t dst, void* src, size_t len){
+void Mmu::write_mem(addr_t dst, const void* src, size_t len){
 	// Check out of bounds
 	check_bounds(dst, len);
 
@@ -218,6 +218,10 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 		if (s.segment_flags.find("X") != string::npos)
 			perm |= PERM_EXEC;
 		set_perms(s.segment_virtaddr, s.segment_memsize, perm);
+
+		// Update next allocation beyond any section we load
+		next_alloc = max(next_alloc, (addr_t)((s.segment_virtaddr
+		                              + s.segment_memsize  + 0xFFF) & !0xFFF));
 	}
 }
 
