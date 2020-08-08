@@ -128,7 +128,7 @@ class Mmu {
 
 template<class T>
 T Mmu::read(addr_t addr){
-	if (addr % sizeof(addr) != 0)
+	if (addr % sizeof(T) != 0)
 		throw Fault(Fault::Type::MisalignedRead, addr);
 	T result;
 	read_mem(&result, addr, sizeof(T));
@@ -137,7 +137,7 @@ T Mmu::read(addr_t addr){
 
 template<class T>
 void Mmu::write(addr_t addr, T value){
-	if (addr % sizeof(addr) != 0)
+	if (addr % sizeof(T) != 0)
 		throw Fault(Fault::Type::MisalignedWrite, addr);
 	write_mem(addr, &value, sizeof(T));
 }

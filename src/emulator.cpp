@@ -7,6 +7,13 @@
 
 using namespace std;
 
+enum Reg {
+	zero, at, v0, v1, a0, a1, a2, a3,
+	t0,   t1, t2, t3, t4, t5, t6, t7,
+	s0,   s1, s2, s3, s4, s5, s6, s7,
+	t8,   t9, k0, k1, gp, sp, fp, ra,
+};
+
 /* Emulator::Emulator(): {
 	memset(regs, 0, sizeof(regs));
 	hi = 0;
@@ -19,8 +26,8 @@ Emulator::Emulator(size_t mem_size): mmu(mem_size) {
 	hi = 0;
 	lo = 0;
 	pc = 0;
-	condition   = false;
-	jump_offset = 0;
+	condition = false;
+	jump_addr = 0;
 }
 
 void Emulator::set_reg(uint8_t reg, uint32_t val){
@@ -54,8 +61,8 @@ void Emulator::reset(const Emulator& other){
 	hi = other.hi;
 	lo = other.lo;
 	pc = other.pc;
-	condition   = other.condition;
-	jump_offset = other.jump_offset;
+	condition = other.condition;
+	jump_addr = other.jump_addr;
 }
 
 void Emulator::load_elf(const char* pathname, const vector<string>& argv){
@@ -65,7 +72,7 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	pc = elf.get_entry();
 
 	// Allocate the stack
-	regs[29] = mmu.alloc(2 * 1024 * 1024) + 2 * 1024 * 1024;
+	regs[Reg::sp] = mmu.alloc(2 * 1024 * 1024) + 2 * 1024 * 1024;
 
 	// Load args into memory
 	vector<addr_t> argv_vm;
@@ -77,34 +84,60 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	}
 	argv_vm.push_back(0); // Argv last element must be NULL
 
-	// Set up argv and argc. Maybe I have to set up envp too?
+	// Set up auxp
+	regs[Reg::sp] -= 4;
+	mmu.write<addr_t>(regs[Reg::sp], 0);
+
+	// Set up envp
+	regs[Reg::sp] -= 4;
+	mmu.write<addr_t>(regs[Reg::sp], 0);
+
+	// Set up argv and argc
 	for (auto it = argv_vm.rbegin(); it != argv_vm.rend(); ++it){
-		regs[29] -= 4;
-		mmu.write<addr_t>(regs[29], *it);
+		regs[Reg::sp] -= 4;
+		mmu.write<addr_t>(regs[Reg::sp], *it);
 	}
-	regs[29] -= 4;
-	mmu.write<uint32_t>(regs[29], argv.size());
+	regs[Reg::sp] -= 4;
+	mmu.write<uint32_t>(regs[Reg::sp], argv.size());
 
 	printf("Entry 0x%X\n", pc);
 }
 
 // Possibilities: Clean exit, timeout, [exception (fault)]
 void Emulator::run(){
-	for (int i= 0; i < 10; i++){
+	for (int i= 0; i < 1000; i++){
 		run_inst();
 		cout << *this << endl;
+		if (pc == 0x4014a4){
+			cout << "MAIN" << endl;
+			break;
+		}
+	}
+}
+
+void Emulator::handle_syscall(uint32_t syscall){
+	switch (syscall){
+		case 4024: // getuid
+		case 4047: // getgid
+		case 4049: // geteuid
+		case 4050: // getegid
+			regs[Reg::v0] = 0;
+			regs[Reg::a3] = 0;
+			break;
+		default:
+			die("Unimplemented syscall: %d\n", syscall);
 	}
 }
 
 
 // Instruction handlers indexed by opcode
 const inst_handler Emulator::inst_handlers[] = {
-	&Emulator::inst_R, // 000 000
-	&Emulator::inst_RI, // 000 001
+	&Emulator::inst_R,             // 000 000
+	&Emulator::inst_RI,            // 000 001
 	&Emulator::inst_unimplemented, // 000 010
 	&Emulator::inst_unimplemented, // 000 011
-	&Emulator::inst_unimplemented, // 000 100
-	&Emulator::inst_unimplemented, // 000 101
+	&Emulator::inst_beq,           // 000 100
+	&Emulator::inst_bne,           // 000 101
 	&Emulator::inst_unimplemented, // 000 110
 	&Emulator::inst_unimplemented, // 000 111
 	&Emulator::inst_unimplemented, // 001 000
@@ -136,13 +169,13 @@ const inst_handler Emulator::inst_handlers[] = {
 	&Emulator::inst_unimplemented, // 100 010
 	&Emulator::inst_lw,            // 100 011
 	&Emulator::inst_unimplemented, // 100 100
-	&Emulator::inst_unimplemented, // 100 101
+	&Emulator::inst_lhu,           // 100 101
 	&Emulator::inst_unimplemented, // 100 110
 	&Emulator::inst_unimplemented, // 100 111
 	&Emulator::inst_unimplemented, // 101 000
 	&Emulator::inst_unimplemented, // 101 001
 	&Emulator::inst_unimplemented, // 101 010
-	&Emulator::inst_unimplemented, // 101 011
+	&Emulator::inst_sw,            // 101 011
 	&Emulator::inst_unimplemented, // 101 100
 	&Emulator::inst_unimplemented, // 101 101
 	&Emulator::inst_unimplemented, // 101 110
@@ -167,7 +200,7 @@ const inst_handler Emulator::inst_handlers[] = {
 
 // Type R instruction handlers indexed by functor
 const inst_handler Emulator::inst_handlers_R[] = {
-	&Emulator::inst_nop,           // 000 000
+	&Emulator::inst_sll,           // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_unimplemented, // 000 010
 	&Emulator::inst_unimplemented, // 000 011
@@ -175,11 +208,11 @@ const inst_handler Emulator::inst_handlers_R[] = {
 	&Emulator::inst_unimplemented, // 000 101
 	&Emulator::inst_unimplemented, // 000 110
 	&Emulator::inst_unimplemented, // 000 111
-	&Emulator::inst_unimplemented, // 001 000
-	&Emulator::inst_unimplemented, // 001 001
+	&Emulator::inst_jr,            // 001 000
+	&Emulator::inst_jalr,          // 001 001
 	&Emulator::inst_unimplemented, // 001 010
 	&Emulator::inst_unimplemented, // 001 011
-	&Emulator::inst_unimplemented, // 001 100
+	&Emulator::inst_syscall,       // 001 100
 	&Emulator::inst_unimplemented, // 001 101
 	&Emulator::inst_unimplemented, // 001 110
 	&Emulator::inst_unimplemented, // 001 111
@@ -200,10 +233,10 @@ const inst_handler Emulator::inst_handlers_R[] = {
 	&Emulator::inst_unimplemented, // 011 110
 	&Emulator::inst_unimplemented, // 011 111
 	&Emulator::inst_unimplemented, // 100 000
-	&Emulator::inst_unimplemented, // 100 001
+	&Emulator::inst_addu,          // 100 001
 	&Emulator::inst_unimplemented, // 100 010
 	&Emulator::inst_unimplemented, // 100 011
-	&Emulator::inst_unimplemented, // 100 100
+	&Emulator::inst_and,           // 100 100
 	&Emulator::inst_or,            // 100 101
 	&Emulator::inst_unimplemented, // 100 110
 	&Emulator::inst_unimplemented, // 100 111
@@ -277,9 +310,9 @@ void Emulator::run_inst(){
 	// If needed, take the branch after fetching the current instruction
 	// Otherwise, just increment PC so it points to the next instruction
 	if (condition){
-		pc += jump_offset;
+		pc = jump_addr;
 		condition = false;
-		jump_offset = 0;
+		jump_addr = 0;
 	} else 
 		pc += 4;
 
@@ -313,9 +346,9 @@ void Emulator::inst_or(uint32_t val){
 
 void Emulator::inst_bgezal(uint32_t val){
 	inst_RI_t inst(val);
-	regs[31]    = pc + 4; // Instruction after the delay slot
-	condition   = (inst.s == 0 || regs[inst.s] >= 0);
-	jump_offset = inst.C << 2;
+	regs[Reg::ra]  = pc + 4; // Instruction after the delay slot
+	condition = (inst.s == 0 || regs[inst.s] >= 0);
+	jump_addr = pc + ((int16_t)inst.C << 2);
 }
 
 void Emulator::inst_nop(uint32_t val){ }
@@ -336,17 +369,83 @@ void Emulator::inst_lw(uint32_t val){
 	set_reg(inst.t, mmu.read<uint32_t>(addr));
 }
 
+void Emulator::inst_and(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, get_reg(inst.s) & get_reg(inst.t));
+}
+
+void Emulator::inst_sw(uint32_t val){
+	inst_I_t inst(val);
+	addr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	mmu.write<uint32_t>(addr, get_reg(inst.t));
+}
+
+void Emulator::inst_jalr(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, pc+4); // Instruction after the delay slot
+	condition = true;
+	jump_addr = get_reg(inst.s);
+}
+
+void Emulator::inst_beq(uint32_t val){
+	inst_I_t inst(val);
+	condition = (get_reg(inst.s) == get_reg(inst.t));
+	jump_addr = pc + ((int16_t)inst.C << 2);
+}
+
+void Emulator::inst_addu(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, get_reg(inst.t) + get_reg(inst.s));
+}
+
+void Emulator::inst_sll(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, get_reg(inst.t) << inst.S);
+}
+
+void Emulator::inst_bne(uint32_t val){
+	inst_I_t inst(val);
+	condition = (get_reg(inst.s) != get_reg(inst.t));
+	jump_addr = pc + ((int16_t)inst.C << 2);
+}
+
+void Emulator::inst_jr(uint32_t val){
+	inst_R_t inst(val);
+	condition = true;
+	jump_addr = get_reg(inst.s);
+}
+
+void Emulator::inst_lhu(uint32_t val){
+	inst_I_t inst(val);
+	addr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	set_reg(inst.t, mmu.read<uint16_t>(addr));
+}
+
+void Emulator::inst_syscall(uint32_t val){
+	handle_syscall(regs[Reg::v0]);
+}
+
+
+const char* regs_map[] = {
+	"00",  "at", "v0", "v1",
+	"a0", "a1", "a2", "a3",
+	"t0", "t1", "t2", "t3", 
+	"t4", "t5", "t6", "t7", 
+	"s0", "s1", "s2", "s3", 
+	"s4", "s5", "s6", "s7", 
+	"t8", "t9", "k0", "k1", 
+	"gp", "sp", "fp", "ra"
+};
 ostream& operator<<(ostream& os, const Emulator& emu){
 	os << hex << setfill('0');
-	os << "PC: " << emu.pc << endl;
+	os << "PC:  " << setw(8) << emu.pc << endl;
 	for (int i = 0; i < 32; i++){
-		os << "$" << setw(2) << dec << i << hex << ": " << setw(8)
-		   << emu.regs[i] << "\t";
+		os << "$" << regs_map[i] << ": " << setw(8) << emu.regs[i] << "\t";
 		if ((i+1)%8 == 0)
 			os << endl;
 	}
-	os << "condition: " << emu.condition
-	   << "\tjump offset: " << emu.jump_offset << endl;
+	os << "condition: " << emu.condition << "\t"
+	   << "jump addr: " << emu.jump_addr << endl;
 	os << dec;
 	return os;
 }

@@ -253,6 +253,14 @@ ostream& operator<<(ostream& os, const Fault& f){
 		case Fault::Type::OutOfBounds:
 			os << "OutOfBounds";
 			break;
+		case Fault::Type::MisalignedRead:
+			os << "MisalignedRead";
+			break;
+		case Fault::Type::MisalignedWrite:
+			os << "MisalignedWrite";
+			break;
+		default:
+			os << "UnimplementedFault";
 	}
 	os << " Fault, fault address = 0x" << hex << f.fault_addr << dec;
 	return os;

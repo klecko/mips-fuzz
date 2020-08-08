@@ -15,7 +15,7 @@ class Emulator {
 		addr_t    pc;
 
 		bool      condition;
-		int32_t   jump_offset;
+		addr_t    jump_addr;
 
 		void handle_syscall(uint32_t syscall);
 
@@ -58,6 +58,16 @@ class Emulator {
 		void inst_lui(uint32_t);
 		void inst_addiu(uint32_t);
 		void inst_lw(uint32_t);
+		void inst_and(uint32_t);
+		void inst_sw(uint32_t);
+		void inst_jalr(uint32_t);
+		void inst_beq(uint32_t);
+		void inst_addu(uint32_t);
+		void inst_sll(uint32_t);
+		void inst_bne(uint32_t);
+		void inst_jr(uint32_t);
+		void inst_lhu(uint32_t);
+		void inst_syscall(uint32_t);
 };
 
 struct inst_R_t {
