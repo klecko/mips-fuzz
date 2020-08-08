@@ -28,6 +28,8 @@ Emulator::Emulator(vsize_t mem_size): mmu(mem_size) {
 	pc = 0;
 	condition = false;
 	jump_addr = 0;
+	data_segm = 0;
+	brk       = 0;
 }
 
 void Emulator::set_reg(uint8_t reg, uint32_t val){
@@ -63,26 +65,33 @@ void Emulator::reset(const Emulator& other){
 	pc = other.pc;
 	condition = other.condition;
 	jump_addr = other.jump_addr;
+	data_segm = other.data_segm;
+	brk       = other.brk;
 }
 
 void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	Elf_parser elf(pathname);
 	mmu.load_elf(elf.get_segments());
 
+	// Set entry
 	pc = elf.get_entry();
+	printf("Entry 0x%X\n", pc);
 
 	// Allocate the stack
-	regs[Reg::sp] = mmu.alloc(2 * 1024 * 1024) + 2 * 1024 * 1024;
+	regs[Reg::sp] = mmu.alloc_stack(2 * 1024 * 1024);
+	printf("Allocated stack at 0x%X\n", regs[Reg::sp]);
 
-	// Load args into memory
+	// Load args into the stack
 	vector<vaddr_t> argv_vm;
-	vaddr_t arg_vm;
 	for (const string& arg : argv){
-		arg_vm = mmu.alloc(arg.size()+1);
-		mmu.write_mem(arg_vm, arg.c_str(), arg.size()+1);
-		argv_vm.push_back(arg_vm);
+		regs[Reg::sp] -= arg.size()+1;
+		mmu.write_mem(regs[Reg::sp], arg.c_str(), arg.size()+1);
+		argv_vm.push_back(regs[Reg::sp]);
 	}
 	argv_vm.push_back(0); // Argv last element must be NULL
+
+	// Align sp
+	regs[Reg::sp] = regs[Reg::sp] - 0xF & ~0xF;
 
 	// Set up auxp
 	regs[Reg::sp] -= 4;
@@ -99,19 +108,12 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	}
 	regs[Reg::sp] -= 4;
 	mmu.write<uint32_t>(regs[Reg::sp], argv.size());
-
-	printf("Entry 0x%X\n", pc);
 }
 
 // Possibilities: Clean exit, timeout, [exception (fault)]
 void Emulator::run(){
 	for (int i= 0; i < 1000; i++){
 		run_inst();
-		if (pc == 0x44bce0)
-			printf("brk(%d)\n", regs[Reg::a0]);
-		else if (pc == 0x42b1a0)
-			printf("sbrk(%d)\n", regs[Reg::a0]);
-		//cout << *this << endl;
 		if (pc == 0x4014a4){
 			cout << "MAIN" << endl;
 			break;
@@ -119,13 +121,33 @@ void Emulator::run(){
 	}
 }
 
+uint32_t Emulator::sys_brk(vaddr_t addr){
+	// Initialize data segment on first call. This should be the first alloc
+	if (data_segm == 0){
+		data_segm = mmu.alloc(0x1000);
+		brk       = data_segm + 0x1000;
+		if (data_segm % 0x1000 != 0)
+			die("Unaligned data segment: 0x%X\n", data_segm);
+	}
+
+	// Attempt to get current brk
+	if (addr == 0)
+		return brk;
+
+	// Attempt to reduce brk
+	if (addr < brk)
+		die("brk(0x%X): attempt to reduce brk (current is 0x%X)\n", addr, brk);
+
+	// We don't serve attempts to increase brk for now
+	return brk;
+}
+
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
 		case 4045: // brk
-			/*if (regs[Reg::a0] != 0)
-				die("brk(%d)\n", regs[Reg::a0]);*/
-			regs[Reg::v0] = 0;
+			regs[Reg::v0] = sys_brk(regs[Reg::a0]);
 			regs[Reg::a3] = 1;
+			printf("brk(0x%X) --> 0x%X\n", regs[Reg::a0], regs[Reg::v0]);
 			break;
 		case 4024: // getuid
 		case 4047: // getgid

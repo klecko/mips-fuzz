@@ -15,6 +15,7 @@ Mmu::Mmu(){
 	memory_len = 0;
 	perms      = NULL;
 	next_alloc = 0;
+	stack      = 0;
 } 
 
 Mmu::Mmu(vsize_t mem_size){
@@ -22,6 +23,7 @@ Mmu::Mmu(vsize_t mem_size){
 	memory_len = mem_size;
 	perms      = new uint8_t[mem_size];
 	next_alloc = 0;
+	stack      = 0;
 	dirty_bitmap.resize(memory_len/DIRTY_BLOCK_SIZE + 1, false);
 	memset(memory, 0, mem_size);
 	memset(perms, 0, mem_size);
@@ -32,6 +34,7 @@ Mmu::Mmu(const Mmu& other){
 	memory       = new uint8_t[memory_len];
 	perms        = new uint8_t[memory_len];
 	next_alloc   = other.next_alloc;
+	stack        = other.stack;
 	dirty_blocks = vector<vaddr_t>(other.dirty_blocks);
 	dirty_bitmap = vector<bool>(other.dirty_bitmap);
 	memcpy(memory, other.memory, memory_len);
@@ -58,6 +61,7 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.memory_len, second.memory_len);
 	swap(first.perms, second.perms);
 	swap(first.next_alloc, second.next_alloc);
+	swap(first.stack, second.stack);
 	swap(first.dirty_blocks, second.dirty_blocks);
 	swap(first.dirty_bitmap, second.dirty_bitmap);
 }
@@ -65,8 +69,6 @@ void swap(Mmu& first, Mmu& second){
 void Mmu::check_bounds(vaddr_t addr, vsize_t len){
 	if (addr + len > memory_len)
 		throw Fault(Fault::Type::OutOfBounds, addr);
-		/*die("Out of bounds: accessing 0x%lX with len 0x%lX (size is "
-		    "0x%lX)", addr, len, memory_len);*/
 }
 
 void Mmu::set_dirty(vaddr_t addr, vsize_t len){
@@ -154,10 +156,11 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 
 vaddr_t Mmu::alloc(vsize_t size){
 	// Check out of memory
-	if (next_alloc + size > memory_len)
-		die("Out of memory allocating 0x%X bytes", size);
+	vaddr_t alloc_limit = (stack ? stack : memory_len);
+	if (next_alloc + size > alloc_limit)
+		die("Out of memory allocating 0x%X bytes\n", size);
 
-	vaddr_t aligned_size  = size + 0xF & ~0xF;
+	vsize_t aligned_size  = size + 0xF & ~0xF;
 	vaddr_t current_alloc = next_alloc;
 
 	// Memory is by default readable and writable, but not initialized
@@ -166,9 +169,26 @@ vaddr_t Mmu::alloc(vsize_t size){
 	// Update next allocation
 	next_alloc += aligned_size;
 
+	printf("alloc(0x%X) --> 0x%X\n", size, current_alloc);
 	return current_alloc;
 }
 
+vaddr_t Mmu::alloc_stack(vsize_t size){
+	// Check if there is a stack already
+	if (stack)
+		die("Attempt to allocate a second stack\n");
+
+	// Check out of memory and alignment
+	if (memory_len - size < next_alloc)
+		die("Out of memory allocating a stack of 0x%X bytes\n", size);
+	if (size % 0x1000 != 0)
+		die("Attempt to allocate an unaligned stack of size 0x%X\n", size);
+
+	stack = memory_len - size;
+	set_perms(stack, size, PERM_READ|PERM_WRITE);
+
+	return memory_len;
+}
 
 Mmu Mmu::fork(){
 	// Create copy and reset dirty blocks

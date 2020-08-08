@@ -8,15 +8,24 @@ typedef void (Emulator::*const inst_handler)(uint32_t);
 
 class Emulator {
 	private:
+		// Memory
 		Mmu mmu;
 
+		// Registers
 		uint32_t  regs[32];
 		uint32_t  hi, lo;
 		vaddr_t   pc;
 
+		// Handling of branches. If condition is true, pc must be updated to
+		// jump_addr in next cycle
 		bool      condition;
 		vaddr_t   jump_addr;
 
+		// Virtual addresses of data segment beginning and end. Used by sys_brk
+		vaddr_t  data_segm;
+		vaddr_t  brk;
+
+		uint32_t sys_brk(vaddr_t addr);
 		void handle_syscall(uint32_t syscall);
 
 		void run_inst();
@@ -32,10 +41,13 @@ class Emulator {
 		void set_pc(vaddr_t addr);
 		uint32_t get_pc();
 
+		// Forks the emulator and returns the child
 		Emulator fork();
 
+		// Resets the emulator to the parent it has previously been forked from
 		void reset(const Emulator& other);
 
+		// Load elf into memory, allocate stack and load argv into the stack
 		void load_elf(const char* pathname, const std::vector<std::string>& argv);
 
 		void run();

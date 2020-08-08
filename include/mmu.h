@@ -63,6 +63,10 @@ class Mmu {
 		// Next allocation returned by `alloc`
 		vaddr_t  next_alloc;
 
+		// Virtual address of the top of the stack region, if allocated
+		// Don't confuse with emulator stack pointer
+		vaddr_t  stack;
+
 		// Holds the index of every dirty block
 		std::vector<vaddr_t> dirty_blocks;
 
@@ -103,6 +107,10 @@ class Mmu {
 		// Allocates a block of `size` bytes. Default perms are RW
 		vaddr_t alloc(vsize_t size);
 
+		// Allocates a stack at the end of the guest memory space
+		// Returns the bottom of the stack (last valid address plus one)
+		vaddr_t alloc_stack(vsize_t size);
+
 		// Read `len` bytes from virtual addr `src` into `dst` checking perms
 		void read_mem(void* dst, vaddr_t src, vsize_t len);
 
@@ -120,9 +128,10 @@ class Mmu {
 		// Forks the Mmu and returns the child
 		Mmu fork();
 
-		// Resets the Mmu to the parent which has previously been forked from
+		// Resets the Mmu to the parent it has previously been forked from
 		void reset(const Mmu& other);
 
+		// Load elf segments into memory and update `next_alloc` beyond them
 		void load_elf(const std::vector<segment_t>& segments);
 
 		// Hexdumps the memory
