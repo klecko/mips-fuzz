@@ -14,6 +14,10 @@ enum Reg {
 	t8,   t9, k0, k1, gp, sp, fp, ra,
 };
 
+const std::unordered_map<vaddr_t, breakpoint_t> Emulator::breakpoints = {
+	{0x0042b1a0, &Emulator::sbrk_bp}
+};
+
 /* Emulator::Emulator(): {
 	memset(regs, 0, sizeof(regs));
 	hi = 0;
@@ -110,7 +114,7 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 void Emulator::run(){
 	for (int i= 0; i < 1000; i++){
 		run_inst();
-		//cout << *this << endl;
+		cout << *this << endl;
 		if (pc == 0x4014a4){
 			cout << "MAIN" << endl;
 			break;
@@ -118,7 +122,18 @@ void Emulator::run(){
 	}
 }
 
-uint32_t Emulator::sys_brk(vaddr_t addr){
+void Emulator::sbrk_bp(){
+	int32_t increment = regs[Reg::a0];
+	if (increment < 0)
+		die("sbrk neg size: %d\n", increment);
+
+	vaddr_t addr = mmu.alloc(increment);
+	regs[Reg::v0] = addr;
+	pc = regs[Reg::ra];
+	printf("sbrk(%d) --> 0x%X\n", increment, addr);
+}
+
+/* uint32_t Emulator::sys_brk(vaddr_t addr){
 	vaddr_t brk = mmu.get_brk();
 
 	// Attempt to get current brk
@@ -130,15 +145,10 @@ uint32_t Emulator::sys_brk(vaddr_t addr){
 
 	// If we got here change was successful
 	return addr;
-}
+} */
 
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
-		case 4045: // brk
-			regs[Reg::v0] = sys_brk(regs[Reg::a0]);
-			regs[Reg::a3] = 1;
-			printf("brk(0x%X) --> 0x%X\n", regs[Reg::a0], regs[Reg::v0]);
-			break;
 		case 4024: // getuid
 		case 4047: // getgid
 		case 4049: // geteuid
@@ -153,7 +163,7 @@ void Emulator::handle_syscall(uint32_t syscall){
 
 
 // Instruction handlers indexed by opcode
-const inst_handler Emulator::inst_handlers[] = {
+const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_R,             // 000 000
 	&Emulator::inst_RI,            // 000 001
 	&Emulator::inst_unimplemented, // 000 010
@@ -221,7 +231,7 @@ const inst_handler Emulator::inst_handlers[] = {
 };
 
 // Type R instruction handlers indexed by functor
-const inst_handler Emulator::inst_handlers_R[] = {
+const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_sll,           // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_unimplemented, // 000 010
@@ -289,7 +299,7 @@ const inst_handler Emulator::inst_handlers_R[] = {
 };
 
 // Type RI instruction handlers indexed by functor
-const inst_handler Emulator::inst_handlers_RI[] = {
+const inst_handler_t Emulator::inst_handlers_RI[] = {
 	&Emulator::inst_bltz,          // 00 000
 	&Emulator::inst_bgez,          // 00 001
 	&Emulator::inst_unimplemented, // 00 010
@@ -325,7 +335,7 @@ const inst_handler Emulator::inst_handlers_RI[] = {
 };
 
 // Type special2 instructions indexed by functor
-const inst_handler Emulator::inst_handlers_special2[] = {
+const inst_handler_t Emulator::inst_handlers_special2[] = {
 	&Emulator::inst_unimplemented, // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_mul,           // 000 010
@@ -392,7 +402,7 @@ const inst_handler Emulator::inst_handlers_special2[] = {
 	&Emulator::inst_unimplemented, // 111 111
 };
 
-const inst_handler Emulator::inst_handlers_special3[] = {
+const inst_handler_t Emulator::inst_handlers_special3[] = {
 	&Emulator::inst_unimplemented, // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_unimplemented, // 000 010
@@ -460,6 +470,10 @@ const inst_handler Emulator::inst_handlers_special3[] = {
 };
 
 void Emulator::run_inst(){
+	// Handle breakpoint. It may change pc
+	if (breakpoints.count(pc))
+		(this->*breakpoints.at(pc))();
+
 	uint32_t inst   = mmu.read<uint32_t>(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
 	printf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);

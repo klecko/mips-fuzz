@@ -1,12 +1,14 @@
 #ifndef _EMULATOR_H
 #define _EMULATOR_H
 
+#include <unordered_map>
 #include "mmu.h"
 
 // Implement prefetch properly
 
 class Emulator;
-typedef void (Emulator::*const inst_handler)(uint32_t);
+typedef void (Emulator::*const inst_handler_t)(uint32_t);
+typedef void (Emulator::*breakpoint_t)();
 
 class Emulator {
 	private:
@@ -23,10 +25,17 @@ class Emulator {
 		bool      condition;
 		vaddr_t   jump_addr;
 
-		uint32_t sys_brk(vaddr_t addr);
+		// Breakpoints hash table
+		static const std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
+
+		// Breakpoints
+		void sbrk_bp();
+
+		/* uint32_t sys_brk(vaddr_t addr); */
 		void handle_syscall(uint32_t syscall);
 
 		void run_inst();
+
 
 	public:
 		//Emulator();
@@ -53,11 +62,11 @@ class Emulator {
 		friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 
 	private: // Instruction handlers
-		static const inst_handler inst_handlers[];
-		static const inst_handler inst_handlers_R[];
-		static const inst_handler inst_handlers_RI[];
-		static const inst_handler inst_handlers_special2[];
-		static const inst_handler inst_handlers_special3[];
+		static const inst_handler_t inst_handlers[];
+		static const inst_handler_t inst_handlers_R[];
+		static const inst_handler_t inst_handlers_RI[];
+		static const inst_handler_t inst_handlers_special2[];
+		static const inst_handler_t inst_handlers_special3[];
 
 		void inst_R(uint32_t);
 		void inst_RI(uint32_t);

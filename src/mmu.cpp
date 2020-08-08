@@ -15,7 +15,6 @@ Mmu::Mmu(){
 	memory_len = 0;
 	perms      = NULL;
 	next_alloc = 0;
-	brk        = 0;
 	tls        = 0;
 	stack      = 0;
 } 
@@ -25,7 +24,6 @@ Mmu::Mmu(vsize_t mem_size){
 	memory_len = mem_size;
 	perms      = new uint8_t[mem_size];
 	next_alloc = 0;
-	brk        = 0;
 	tls        = 0;
 	stack      = 0;
 	dirty_bitmap.resize(memory_len/DIRTY_BLOCK_SIZE + 1, false);
@@ -38,7 +36,6 @@ Mmu::Mmu(const Mmu& other){
 	memory       = new uint8_t[memory_len];
 	perms        = new uint8_t[memory_len];
 	next_alloc   = other.next_alloc;
-	brk          = other.brk;
 	tls          = other.tls;
 	stack        = other.stack;
 	dirty_blocks = vector<vaddr_t>(other.dirty_blocks);
@@ -67,28 +64,10 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.memory_len, second.memory_len);
 	swap(first.perms, second.perms);
 	swap(first.next_alloc, second.next_alloc);
-	swap(first.brk, second.brk);
 	swap(first.tls, second.tls);
 	swap(first.stack, second.stack);
 	swap(first.dirty_blocks, second.dirty_blocks);
 	swap(first.dirty_bitmap, second.dirty_bitmap);
-}
-
-void Mmu::set_brk(vaddr_t new_brk){
-	// Check out of memory
-	if (new_brk > stack)
-		die("Out of memory: attempt to set brk to 0x%X, stack top is 0x%X\n", 
-		    new_brk, stack);
-
-	// We don't reduce it for now
-	if (new_brk < brk)
-		die("Attempt to reduce brk\n");
-	
-	brk = new_brk;
-}
-
-vaddr_t Mmu::get_brk(){
-	return brk;
 }
 
 vaddr_t Mmu::get_tls(){
@@ -185,7 +164,7 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 
 vaddr_t Mmu::alloc(vsize_t size){
 	// Check out of memory
-	if (next_alloc + size > brk)
+	if (next_alloc + size > stack)
 		die("Out of memory allocating 0x%X bytes\n", size);
 
 	vsize_t aligned_size  = size + 0xF & ~0xF;
@@ -279,15 +258,12 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 			uint8_t perm = parse_perm(s.segment_flags);
 			set_perms(s.segment_virtaddr, s.segment_memsize, perm);
 
-			// Brk addr is the page beyond the data segment, which is the last one
+			// Update next allocation beyond any segment we load
 			vaddr_t segm_next_page = 
 				s.segment_virtaddr + s.segment_memsize + 0xFFF & ~0xFFF;
-			brk = max(brk, segm_next_page);
+			next_alloc = max(next_alloc, segm_next_page);
 		}
 	}
-	// Set next allocation to brk. Brk will be extended to allow allocations
-	// (probably?)
-	next_alloc = brk;
 }
 
 ostream& operator<<(ostream& os, const Mmu& mmu){

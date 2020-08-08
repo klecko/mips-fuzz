@@ -63,9 +63,6 @@ class Mmu {
 		// Next allocation returned by `alloc`
 		vaddr_t  next_alloc;
 
-		// Brk virtual addr, set when an ELF is loaded
-		vaddr_t  brk;
-
 		// Virtual address of thread local storage, if allocated
 		vaddr_t  tls;
 
@@ -110,14 +107,9 @@ class Mmu {
 
 		Mmu& operator=(Mmu other);
 
-		// Attempt to set `brk` to `new_brk`. Checks out of memory
-		void set_brk(vaddr_t new_brk);
-
-		vaddr_t get_brk();
-
 		vaddr_t get_tls();
 
-		// Allocates a block of `size` bytes from the heap. Default perms are RW
+		// Allocates a block of `size` bytes. Default perms are RW
 		vaddr_t alloc(vsize_t size);
 
 		// Allocates a stack at the end of the guest memory space
