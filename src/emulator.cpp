@@ -156,6 +156,17 @@ void Emulator::handle_syscall(uint32_t syscall){
 			regs[Reg::v0] = 0;
 			regs[Reg::a3] = 0;
 			break;
+
+		case 4283: // set_thread_area
+			regs[Reg::v0] = 0;
+			regs[Reg::a3] = 1;
+			break;
+
+		case 4288: // openat
+			cout << mmu.read_string(regs[Reg::a1]) << endl;
+			die("openat\n");
+			break;
+
 		default:
 			die("Unimplemented syscall: %d\n", syscall);
 	}
@@ -167,7 +178,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_R,             // 000 000
 	&Emulator::inst_RI,            // 000 001
 	&Emulator::inst_unimplemented, // 000 010
-	&Emulator::inst_unimplemented, // 000 011
+	&Emulator::inst_jal,           // 000 011
 	&Emulator::inst_beq,           // 000 100
 	&Emulator::inst_bne,           // 000 101
 	&Emulator::inst_blez,          // 000 110
@@ -196,7 +207,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_unimplemented, // 011 101
 	&Emulator::inst_unimplemented, // 011 110
 	&Emulator::inst_special3,      // 011 111
-	&Emulator::inst_unimplemented, // 100 000
+	&Emulator::inst_lb,            // 100 000
 	&Emulator::inst_unimplemented, // 100 001
 	&Emulator::inst_unimplemented, // 100 010
 	&Emulator::inst_lw,            // 100 011
@@ -271,7 +282,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_and,           // 100 100
 	&Emulator::inst_or,            // 100 101
 	&Emulator::inst_xor,           // 100 110
-	&Emulator::inst_unimplemented, // 100 111
+	&Emulator::inst_nor,           // 100 111
 	&Emulator::inst_unimplemented, // 101 000
 	&Emulator::inst_unimplemented, // 101 001
 	&Emulator::inst_unimplemented, // 101 010
@@ -435,7 +446,7 @@ const inst_handler_t Emulator::inst_handlers_special3[] = {
 	&Emulator::inst_unimplemented, // 011 101
 	&Emulator::inst_unimplemented, // 011 110
 	&Emulator::inst_unimplemented, // 011 111
-	&Emulator::inst_unimplemented, // 100 000
+	&Emulator::inst_bshfl,         // 100 000
 	&Emulator::inst_unimplemented, // 100 001
 	&Emulator::inst_unimplemented, // 100 010
 	&Emulator::inst_unimplemented, // 100 011
@@ -677,8 +688,7 @@ void Emulator::inst_rdhwr(uint32_t val){
 	uint32_t hwr = 0;
 	switch (inst.d){
 		case 29: // 0b11101, User Local Register
-			hwr = mmu.get_tls();
-			printf("tls = 0x%X\n", hwr);
+			die("tls");
 			break;
 
 		default:
@@ -715,6 +725,41 @@ void Emulator::inst_xori(uint32_t val){
 }
 
 void Emulator::inst_pref(uint32_t val){ }
+
+void Emulator::inst_jal(uint32_t val){
+	inst_J_t inst(val);
+	regs[Reg::ra] = pc + 4; // Instruction after the delay slot
+	condition = true;       // 28 bits from A, 4 bits from pc
+	jump_addr = (inst.A << 2) | (pc & 0xF0000000);
+}
+
+void Emulator::inst_lb(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	set_reg(inst.t, (int32_t)mmu.read<int8_t>(addr));
+}
+
+void Emulator::inst_nor(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, ~(get_reg(inst.d) | get_reg(inst.t)));
+}
+
+void Emulator::inst_bshfl(uint32_t val){
+	switch ((val >> 6) & 0b11111){
+		case 0b11000: // seh
+			inst_seh(val);
+			break;
+
+		default:
+			die("Unimplemented bshfl instruction: 0x%X\n", val);
+	}
+}
+
+void Emulator::inst_seh(uint32_t val){
+	inst_R_t inst(val);
+	uint16_t value = get_reg(inst.t);
+	set_reg(inst.d, (int32_t)(int16_t)value);
+}
 
 const char* regs_map[] = {
 	"00",  "at", "v0", "v1",

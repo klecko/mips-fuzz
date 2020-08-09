@@ -63,9 +63,6 @@ class Mmu {
 		// Next allocation returned by `alloc`
 		vaddr_t  next_alloc;
 
-		// Virtual address of thread local storage, if allocated
-		vaddr_t  tls;
-
 		// Virtual address of the top of the stack region, if allocated
 		// Don't confuse with emulator stack pointer
 		vaddr_t  stack;
@@ -107,8 +104,6 @@ class Mmu {
 
 		Mmu& operator=(Mmu other);
 
-		vaddr_t get_tls();
-
 		// Allocates a block of `size` bytes. Default perms are RW
 		vaddr_t alloc(vsize_t size);
 
@@ -129,6 +124,9 @@ class Mmu {
 		// Writes a value to memory checking perms and misalignment
 		template <class T>
 		void write(vaddr_t addr, T value);
+
+		// Read a string from memory. Probably slow af
+		std::string read_string(vaddr_t addr);
 
 		// Forks the mmu and returns the child
 		Mmu fork();

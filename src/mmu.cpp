@@ -15,7 +15,6 @@ Mmu::Mmu(){
 	memory_len = 0;
 	perms      = NULL;
 	next_alloc = 0;
-	tls        = 0;
 	stack      = 0;
 } 
 
@@ -24,7 +23,6 @@ Mmu::Mmu(vsize_t mem_size){
 	memory_len = mem_size;
 	perms      = new uint8_t[mem_size];
 	next_alloc = 0;
-	tls        = 0;
 	stack      = 0;
 	dirty_bitmap.resize(memory_len/DIRTY_BLOCK_SIZE + 1, false);
 	memset(memory, 0, mem_size);
@@ -36,7 +34,6 @@ Mmu::Mmu(const Mmu& other){
 	memory       = new uint8_t[memory_len];
 	perms        = new uint8_t[memory_len];
 	next_alloc   = other.next_alloc;
-	tls          = other.tls;
 	stack        = other.stack;
 	dirty_blocks = vector<vaddr_t>(other.dirty_blocks);
 	dirty_bitmap = vector<bool>(other.dirty_bitmap);
@@ -64,14 +61,9 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.memory_len, second.memory_len);
 	swap(first.perms, second.perms);
 	swap(first.next_alloc, second.next_alloc);
-	swap(first.tls, second.tls);
 	swap(first.stack, second.stack);
 	swap(first.dirty_blocks, second.dirty_blocks);
 	swap(first.dirty_bitmap, second.dirty_bitmap);
-}
-
-vaddr_t Mmu::get_tls(){
-	return tls;
 }
 
 void Mmu::check_bounds(vaddr_t addr, vsize_t len){
@@ -162,6 +154,16 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	memcpy(memory+dst, src, len);
 }
 
+string Mmu::read_string(vaddr_t addr){
+	string result = "";
+	char c = read<char>(addr++);
+	while (c){
+		result += c;
+		c = read<char>(addr++);
+	}
+	return result;
+}
+
 vaddr_t Mmu::alloc(vsize_t size){
 	// Check out of memory
 	if (next_alloc + size > stack)
@@ -231,15 +233,7 @@ uint8_t parse_perm(const string& flag){
 
 void Mmu::load_elf(const vector<segment_t>& segments){
 	for (const segment_t& s : segments){
-		if (s.segment_type == "TLS"){
-			// TLS is included in one of the LOAD segments, no need to load it,
-			// but it seems to have different perms?
-			// Maybe I have to do that with the others segments too
-			tls = s.segment_virtaddr;
-			uint8_t perm = parse_perm(s.segment_flags);
-			set_perms(s.segment_virtaddr, s.segment_memsize, perm);
-			
-		} else if (s.segment_type == "LOAD"){
+		if (s.segment_type == "LOAD"){
 			printf("Loading at 0x%X\n", s.segment_virtaddr);
 
 			if (s.segment_virtaddr + s.segment_memsize > memory_len)

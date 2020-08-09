@@ -110,6 +110,12 @@ class Emulator {
 		void inst_ori(uint32_t);
 		void inst_xori(uint32_t);
 		void inst_pref(uint32_t);
+		void inst_jal(uint32_t);
+		void inst_lb(uint32_t);
+		void inst_nor(uint32_t);
+		void inst_bshfl(uint32_t);
+		void inst_seh(uint32_t);
+
 };
 
 struct inst_R_t {
@@ -145,6 +151,14 @@ struct inst_I_t {
 		s = (inst >> 21) & 0b00011111;
 		t = (inst >> 16) & 0b00011111;
 		C = inst & 0b11111111'11111111;
+	}
+};
+
+struct inst_J_t {
+	uint32_t A;
+
+	inst_J_t(uint32_t inst){
+		A = inst & 0b11'11111111'11111111'11111111;
 	}
 };
 
