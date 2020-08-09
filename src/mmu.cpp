@@ -113,14 +113,18 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 	for (; addr < addr_end; addr++){
 		if ((perms[addr] & perm) != perm){ 
 			// Permission error. Determine which
+			if (addr == 0x49a4a8)
+				printf("%X %X\n", perm, perms[addr]);
 			if (perm == PERM_WRITE)
 				throw Fault(Fault::Type::Write, addr);
 			else if (perm == PERM_EXEC)
 				throw Fault(Fault::Type::Exec, addr);
 			else if (perms[addr] & PERM_READ)
 				throw Fault(Fault::Type::Uninit, addr);
-			else
+			else if (!(perms[addr] & PERM_READ))
 				throw Fault(Fault::Type::Read, addr);
+			else
+				die("what\n");
 		}
 	}
 }

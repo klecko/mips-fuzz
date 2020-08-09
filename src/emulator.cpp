@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <assert.h>
 #include <unistd.h>
+#include <string>
 #include "emulator.h"
 #include "elf_parser.hpp"
 #include "common.h"
@@ -9,7 +10,7 @@
 using namespace std;
 
 const std::unordered_map<vaddr_t, breakpoint_t> Emulator::breakpoints = {
-	{0x0042b1a0, &Emulator::sbrk_bp}
+	{0x0042b1a0, &Emulator::sbrk_bp},
 };
 
 /* Emulator::Emulator(): {
@@ -26,6 +27,7 @@ Emulator::Emulator(vsize_t mem_size): mmu(mem_size) {
 	pc = 0;
 	condition = false;
 	jump_addr = 0;
+	tls       = 0;
 }
 
 void Emulator::set_reg(uint8_t reg, uint32_t val){
@@ -61,12 +63,14 @@ void Emulator::reset(const Emulator& other){
 	pc = other.pc;
 	condition = other.condition;
 	jump_addr = other.jump_addr;
+	tls       = other.tls;
 }
 
 
 void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	// Stack layout described in
 	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
+	// I add random numbers at the bottom of the stack for auxv
 	Elf_parser elf(pathname);
 	mmu.load_elf(elf.get_segments());
 
@@ -80,6 +84,12 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 
 	push_stack(0);
 
+	// Generate random bytes for auxv. Note seed is not initialized
+	regs[Reg::sp] -= 16;
+	vaddr_t random_bytes = regs[Reg::sp];
+	for (int i = 0; i < 16; i++)
+		mmu.write<uint8_t>(random_bytes + i, rand());
+
 	// Load ascii args into the stack
 	vector<vaddr_t> argv_vm;
 	for (const string& arg : argv){
@@ -91,11 +101,6 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 
 	// Align sp
 	regs[Reg::sp] = regs[Reg::sp] - 0x3 & ~0x3;
-
-	// Generate random bytes for auxv. Note seed is not initialized
-	vaddr_t random_bytes = mmu.alloc(16);
-	for (int i = 0; i < 16; i++)
-		mmu.write<uint8_t>(random_bytes + i, rand());
 
 	// Set up auxp. We don't use push_stack or mmu.write because of
 	// misalignment checks
@@ -117,7 +122,7 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 
 // Possibilities: Clean exit, timeout, [exception (fault)]
 void Emulator::run(){
-	for (int i= 0; i < 1000; i++){
+	while (true){
 		run_inst();
 		cout << *this << endl;
 		if (pc == 0x4014a4){
@@ -132,7 +137,13 @@ void Emulator::sbrk_bp(){
 	if (increment < 0)
 		die("sbrk neg size: %d\n", increment);
 
+	// Perform allocation. Warning: this can be done only once
 	vaddr_t addr = mmu.alloc(increment);
+
+	// Special allocation: zeroed and marked as initialized
+	for (int i = 0; i < increment; i++)
+		mmu.write<uint8_t>(addr + i, 0);
+
 	regs[Reg::v0] = addr;
 	pc = regs[Reg::ra];
 	printf("sbrk(%d) --> 0x%X\n", increment, addr);
@@ -219,6 +230,27 @@ uint32_t Emulator::sys_uname(vaddr_t addr, uint32_t& error){
 	return 0;
 }
 
+uint32_t Emulator::sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
+		                        vaddr_t bufsize, uint32_t& error)
+{
+	printf("buf=0x%X, bufsize=%d\n", buf_addr, bufsize);
+	string pathname = mmu.read_string(pathname_addr);
+	if (pathname == "/proc/self/exe"){
+		char s[] = "/home/klecko/my_fuzzer";
+		if (bufsize < sizeof(s)){
+			die("error readlink\n");
+			error = 1;
+			return -1;
+		}
+		mmu.write_mem(buf_addr, s, sizeof(s));
+		error = 0;
+		return sizeof(s);
+	}
+	
+	cout << pathname <<  endl;
+	die("Unimplemented readlink\n");
+}
+
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
 		case 4024: // getuid
@@ -229,7 +261,16 @@ void Emulator::handle_syscall(uint32_t syscall){
 			regs[Reg::a3] = 0;
 			break;
 
-		case 4122:
+		case 4085: // readlink
+			regs[Reg::v0] = sys_readlink(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3]
+			);
+			break;
+
+		case 4122: // uname
 			regs[Reg::v0] = sys_uname(regs[Reg::a0], regs[Reg::a3]);
 			break;
 
@@ -256,6 +297,8 @@ void Emulator::handle_syscall(uint32_t syscall){
 
 		case 4283: // set_thread_area
 			//die("set_thread_area(0x%X)\n", regs[Reg::a0]);
+			tls = regs[Reg::a0];
+			printf("set tls --> 0x%X\n", tls);
 			regs[Reg::v0] = 0;
 			regs[Reg::a3] = 0;
 			break;
@@ -280,12 +323,12 @@ void Emulator::handle_syscall(uint32_t syscall){
 const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_R,             // 000 000
 	&Emulator::inst_RI,            // 000 001
-	&Emulator::inst_unimplemented, // 000 010
+	&Emulator::inst_j,             // 000 010
 	&Emulator::inst_jal,           // 000 011
 	&Emulator::inst_beq,           // 000 100
 	&Emulator::inst_bne,           // 000 101
 	&Emulator::inst_blez,          // 000 110
-	&Emulator::inst_unimplemented, // 000 111
+	&Emulator::inst_bgtz,          // 000 111
 	&Emulator::inst_unimplemented, // 001 000
 	&Emulator::inst_addiu,         // 001 001
 	&Emulator::inst_slti,          // 001 010
@@ -326,7 +369,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_unimplemented, // 101 101
 	&Emulator::inst_swr,           // 101 110
 	&Emulator::inst_unimplemented, // 101 111
-	&Emulator::inst_unimplemented, // 110 000
+	&Emulator::inst_ll,            // 110 000
 	&Emulator::inst_unimplemented, // 110 001
 	&Emulator::inst_unimplemented, // 110 010
 	&Emulator::inst_pref,          // 110 011
@@ -334,7 +377,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_unimplemented, // 110 101
 	&Emulator::inst_unimplemented, // 110 110
 	&Emulator::inst_unimplemented, // 110 111
-	&Emulator::inst_unimplemented, // 111 000
+	&Emulator::inst_sc,            // 111 000
 	&Emulator::inst_unimplemented, // 111 001
 	&Emulator::inst_unimplemented, // 111 010
 	&Emulator::inst_unimplemented, // 111 011
@@ -350,7 +393,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_srl,           // 000 010
 	&Emulator::inst_unimplemented, // 000 011
-	&Emulator::inst_unimplemented, // 000 100
+	&Emulator::inst_sllv,          // 000 100
 	&Emulator::inst_unimplemented, // 000 101
 	&Emulator::inst_unimplemented, // 000 110
 	&Emulator::inst_unimplemented, // 000 111
@@ -361,26 +404,26 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_syscall,       // 001 100
 	&Emulator::inst_unimplemented, // 001 101
 	&Emulator::inst_unimplemented, // 001 110
-	&Emulator::inst_unimplemented, // 001 111
-	&Emulator::inst_unimplemented, // 010 000
-	&Emulator::inst_unimplemented, // 010 001
+	&Emulator::inst_sync,          // 001 111
+	&Emulator::inst_mfhi,          // 010 000
+	&Emulator::inst_mthi,          // 010 001
 	&Emulator::inst_mflo,          // 010 010
-	&Emulator::inst_unimplemented, // 010 011
+	&Emulator::inst_mtlo,          // 010 011
 	&Emulator::inst_unimplemented, // 010 100
 	&Emulator::inst_unimplemented, // 010 101
 	&Emulator::inst_unimplemented, // 010 110
 	&Emulator::inst_unimplemented, // 010 111
-	&Emulator::inst_unimplemented, // 011 000
-	&Emulator::inst_unimplemented, // 011 001
+	&Emulator::inst_mult,          // 011 000
+	&Emulator::inst_multu,         // 011 001
 	&Emulator::inst_unimplemented, // 011 010
 	&Emulator::inst_divu,          // 011 011
 	&Emulator::inst_unimplemented, // 011 100
 	&Emulator::inst_unimplemented, // 011 101
 	&Emulator::inst_unimplemented, // 011 110
 	&Emulator::inst_unimplemented, // 011 111
-	&Emulator::inst_unimplemented, // 100 000
+	&Emulator::inst_add,           // 100 000
 	&Emulator::inst_addu,          // 100 001
-	&Emulator::inst_unimplemented, // 100 010
+	&Emulator::inst_sub,           // 100 010
 	&Emulator::inst_subu,          // 100 011
 	&Emulator::inst_and,           // 100 100
 	&Emulator::inst_or,            // 100 101
@@ -388,7 +431,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_nor,           // 100 111
 	&Emulator::inst_unimplemented, // 101 000
 	&Emulator::inst_unimplemented, // 101 001
-	&Emulator::inst_unimplemented, // 101 010
+	&Emulator::inst_slt,           // 101 010
 	&Emulator::inst_sltu,          // 101 011
 	&Emulator::inst_unimplemented, // 101 100
 	&Emulator::inst_unimplemented, // 101 101
@@ -517,7 +560,7 @@ const inst_handler_t Emulator::inst_handlers_special2[] = {
 };
 
 const inst_handler_t Emulator::inst_handlers_special3[] = {
-	&Emulator::inst_unimplemented, // 000 000
+	&Emulator::inst_ext,           // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_unimplemented, // 000 010
 	&Emulator::inst_unimplemented, // 000 011
@@ -791,7 +834,10 @@ void Emulator::inst_rdhwr(uint32_t val){
 	uint32_t hwr = 0;
 	switch (inst.d){
 		case 29: // 0b11101, User Local Register
-			die("tls\n");
+			if (!tls)
+				die("not set tls\n");
+			hwr = tls;
+			printf("get tls --> 0x%X\n", tls);
 			break;
 
 		default:
@@ -887,8 +933,6 @@ void Emulator::inst_lwl(uint32_t val){
 	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
 	vaddr_t offset = addr & 3; // offset into aligned word
 
-	printf("0x%X\n", addr);
-
 	// Locurote. Look at the manual
 	uint32_t reg = get_reg(inst.t);
 	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
@@ -943,9 +987,115 @@ void Emulator::inst_swr(uint32_t val){
 	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
 	memcpy((char*)(&w)+offset, &reg, 4-offset);
 	mmu.write<uint32_t>(addr & ~3, w);
-	die("swl\n");
+	die("swr\n");
 }
 
+void Emulator::inst_sllv(uint32_t val){
+	inst_R_t inst(val);
+	uint8_t shift = get_reg(inst.s) & 0b00011111;
+	set_reg(inst.d, get_reg(inst.t) << shift);
+}
+
+void Emulator::inst_slt(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, (int32_t)get_reg(inst.s) < (int32_t)get_reg(inst.t));
+}
+
+void Emulator::inst_sub(uint32_t val){
+	inst_R_t inst(val);
+	int32_t result;
+	bool overflow = __builtin_sub_overflow(
+		(int32_t)get_reg(inst.s),
+		(int32_t)get_reg(inst.t),
+		&result
+	);
+	if (overflow)
+		die("sub overflow\n");
+	set_reg(inst.d, result);
+	die("sub\n");
+}
+
+void Emulator::inst_add(uint32_t val){
+	inst_R_t inst(val);
+	int32_t result;
+	bool overflow = __builtin_add_overflow(
+		(int32_t)get_reg(inst.s),
+		(int32_t)get_reg(inst.t),
+		&result
+	);
+	if (overflow)
+		die("Add overflow\n");
+	set_reg(inst.d, result);
+	die("add\n");
+}
+
+void Emulator::inst_j(uint32_t val){
+	inst_J_t inst(val);
+	condition = true;       // 28 bits from A, 4 bits from pc
+	jump_addr = (inst.A << 2) | (pc & 0xF0000000);
+}
+
+void Emulator::inst_ll(uint32_t val){
+	// Forget about atomics for now
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	set_reg(inst.t, mmu.read<uint32_t>(addr));
+}
+
+void Emulator::inst_sc(uint32_t val){
+	// Forget about atomics for now
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	mmu.write<uint32_t>(addr, get_reg(inst.t));
+	set_reg(inst.t, 1);
+}
+
+void Emulator::inst_sync(uint32_t val){
+	// Forget about atomics for now
+}
+
+void Emulator::inst_bgtz(uint32_t val){
+	inst_I_t inst(val);
+	condition = ((int32_t)get_reg(inst.s) > 0);
+	jump_addr = pc + ((int16_t)inst.C << 2);
+}
+
+void Emulator::inst_mult(uint32_t val){
+	inst_R_t inst(val);
+	uint64_t result = (int32_t)get_reg(inst.s) * (int32_t)get_reg(inst.t);
+	lo = result & 0xFFFFFFFF;
+	hi = (result >> 32) & 0xFFFFFFFF;
+}
+
+void Emulator::inst_multu(uint32_t val){
+	inst_R_t inst(val);
+	uint64_t result = get_reg(inst.s) * get_reg(inst.t);
+	lo = result & 0xFFFFFFFF;
+	hi = (result >> 32) & 0xFFFFFFFF;
+}
+
+void Emulator::inst_mfhi(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, hi);
+}
+
+void Emulator::inst_mthi(uint32_t val){
+	inst_R_t inst(val);
+	hi = get_reg(inst.s);
+}
+
+void Emulator::inst_mtlo(uint32_t val){
+	inst_R_t inst(val);
+	lo = get_reg(inst.s);
+}
+
+void Emulator::inst_ext(uint32_t val){
+	inst_R_t inst(val);
+	uint32_t lsb  = inst.S;
+	uint32_t size = inst.d + 1;
+	uint32_t mask = (1 << (size+1)) - 1;
+	set_reg(inst.t, (get_reg(inst.s) >> lsb) & mask);
+}
 
 const char* regs_map[] = {
 	"00",  "at", "v0", "v1",

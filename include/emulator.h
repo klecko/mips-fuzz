@@ -47,6 +47,8 @@ class Emulator {
 		bool      condition;
 		vaddr_t   jump_addr;
 
+		vaddr_t   tls;
+
 		// Breakpoints hash table
 		static const std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
 
@@ -62,6 +64,8 @@ class Emulator {
 		                  uint32_t flags, uint32_t fd, uint32_t pgoffset,
 		                  uint32_t& error);
 		uint32_t sys_uname(vaddr_t addr, uint32_t& error);
+		uint32_t sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
+		                      vaddr_t bufsize, uint32_t& error);
 
 		void handle_syscall(uint32_t syscall);
 
@@ -159,6 +163,21 @@ class Emulator {
 		void inst_sh(uint32_t);
 		void inst_swl(uint32_t);
 		void inst_swr(uint32_t);
+		void inst_sllv(uint32_t);
+		void inst_slt(uint32_t);
+		void inst_sub(uint32_t);
+		void inst_add(uint32_t);
+		void inst_j(uint32_t);
+		void inst_ll(uint32_t);
+		void inst_sc(uint32_t);
+		void inst_sync(uint32_t);
+		void inst_bgtz(uint32_t);
+		void inst_mult(uint32_t);
+		void inst_multu(uint32_t);
+		void inst_mfhi(uint32_t);
+		void inst_mthi(uint32_t);
+		void inst_mtlo(uint32_t);
+		void inst_ext(uint32_t);
 };
 
 template<class T>
