@@ -1,18 +1,12 @@
 #include <cstring>
 #include <iomanip>
 #include <assert.h>
+#include <unistd.h>
 #include "emulator.h"
 #include "elf_parser.hpp"
 #include "common.h"
 
 using namespace std;
-
-enum Reg {
-	zero, at, v0, v1, a0, a1, a2, a3,
-	t0,   t1, t2, t3, t4, t5, t6, t7,
-	s0,   s1, s2, s3, s4, s5, s6, s7,
-	t8,   t9, k0, k1, gp, sp, fp, ra,
-};
 
 const std::unordered_map<vaddr_t, breakpoint_t> Emulator::breakpoints = {
 	{0x0042b1a0, &Emulator::sbrk_bp}
@@ -69,7 +63,10 @@ void Emulator::reset(const Emulator& other){
 	jump_addr = other.jump_addr;
 }
 
+
 void Emulator::load_elf(const char* pathname, const vector<string>& argv){
+	// Stack layout described in
+	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
 	Elf_parser elf(pathname);
 	mmu.load_elf(elf.get_segments());
 
@@ -81,7 +78,9 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	regs[Reg::sp] = mmu.alloc_stack(2 * 1024 * 1024);
 	printf("Allocated stack at 0x%X\n", regs[Reg::sp]);
 
-	// Load args into the stack
+	push_stack(0);
+
+	// Load ascii args into the stack
 	vector<vaddr_t> argv_vm;
 	for (const string& arg : argv){
 		regs[Reg::sp] -= arg.size()+1;
@@ -91,23 +90,29 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	argv_vm.push_back(0); // Argv last element must be NULL
 
 	// Align sp
-	regs[Reg::sp] = regs[Reg::sp] - 0xF & ~0xF;
+	regs[Reg::sp] = regs[Reg::sp] - 0x3 & ~0x3;
 
-	// Set up auxp
-	regs[Reg::sp] -= 4;
-	mmu.write<vaddr_t>(regs[Reg::sp], 0);
+	// Generate random bytes for auxv. Note seed is not initialized
+	vaddr_t random_bytes = mmu.alloc(16);
+	for (int i = 0; i < 16; i++)
+		mmu.write<uint8_t>(random_bytes + i, rand());
+
+	// Set up auxp. We don't use push_stack or mmu.write because of
+	// misalignment checks
+	Elf32_auxv_t auxv[] = {
+		{AT_RANDOM, random_bytes}, // Address of 16 random bytes
+		{AT_NULL, 0},
+	};
+	regs[Reg::sp] -= sizeof(auxv);
+	mmu.write_mem(regs[Reg::sp], auxv, sizeof(auxv));
 
 	// Set up envp
-	regs[Reg::sp] -= 4;
-	mmu.write<vaddr_t>(regs[Reg::sp], 0);
+	push_stack(0);
 
 	// Set up argv and argc
-	for (auto it = argv_vm.rbegin(); it != argv_vm.rend(); ++it){
-		regs[Reg::sp] -= 4;
-		mmu.write<vaddr_t>(regs[Reg::sp], *it);
-	}
-	regs[Reg::sp] -= 4;
-	mmu.write<uint32_t>(regs[Reg::sp], argv.size());
+	for (auto it = argv_vm.rbegin(); it != argv_vm.rend(); ++it)
+		push_stack<vaddr_t>(*it);
+	push_stack<uint32_t>(argv.size());
 }
 
 // Possibilities: Clean exit, timeout, [exception (fault)]
@@ -147,6 +152,73 @@ void Emulator::sbrk_bp(){
 	return addr;
 } */
 
+uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flags,
+                              uint32_t& error)
+{
+	string pathname = mmu.read_string(pathname_addr);
+	cout << "Trying to open " << pathname << " as " << flags << endl;
+
+	// Just return stdout for now
+	if (pathname == "/dev/tty"){
+		error = 0;
+		return STDOUT_FILENO;
+	}
+
+	die("Unimplemented openat");
+	return 0;
+}
+
+uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
+                              uint32_t& error)
+{
+	if (fd != STDOUT_FILENO)
+		die("sys_writev trying to write to fd %d\n", fd);
+
+	// Return value
+	uint32_t bytes_written;
+
+	// Read iovec structs from guest memory
+	guest_iovec iov[iovcnt];
+	mmu.read_mem(&iov, iov_addr, iovcnt*sizeof(guest_iovec));
+
+	// For each iovec struct, read its content and print it
+	vaddr_t iov_base;
+	vsize_t iov_len;
+	for (int i = 0; i < iovcnt; i++){
+		iov_base = iov[i].iov_base;
+		iov_len  = iov[i].iov_len;
+		char buf[iov_len + 1];
+		mmu.read_mem(buf, iov_base, iov_len);
+		buf[iov_len] = 0;
+		printf("output: %s\n", buf);
+		bytes_written += iov_len;
+	}
+
+	error = 0;
+	return bytes_written;
+}
+
+vaddr_t Emulator::sys_mmap2(vaddr_t addr, vsize_t length, uint32_t prot,
+                            uint32_t flags, uint32_t fd, uint32_t pgoffset,
+                            uint32_t& error)
+{
+	die("mmap2(0x%X, 0x%X, 0x%X, 0x%X, %d, 0x%X)\n", addr, length, prot,
+	    flags, fd, pgoffset);
+}
+
+uint32_t Emulator::sys_uname(vaddr_t addr, uint32_t& error){
+	guest_uname uname = {
+		"Linux",    // sysname
+		"Baby emu", // nodename
+		"666",      // release
+		"666",      // version
+		"mips"      // machine
+	};
+	mmu.write_mem(addr, &uname, sizeof(uname));
+	error = 0;
+	return 0;
+}
+
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
 		case 4024: // getuid
@@ -157,14 +229,45 @@ void Emulator::handle_syscall(uint32_t syscall){
 			regs[Reg::a3] = 0;
 			break;
 
+		case 4122:
+			regs[Reg::v0] = sys_uname(regs[Reg::a0], regs[Reg::a3]);
+			break;
+
+		case 4146: // writev
+			regs[Reg::v0] = sys_writev(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3]
+			);
+			break;
+
+		case 4210: // mmap2
+			regs[Reg::v0] = sys_mmap2(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3],
+				mmu.read<uint32_t>(regs[Reg::sp]+16),
+				mmu.read<uint32_t>(regs[Reg::sp]+20),
+				regs[Reg::a3]
+			);
+			break;
+
 		case 4283: // set_thread_area
+			//die("set_thread_area(0x%X)\n", regs[Reg::a0]);
 			regs[Reg::v0] = 0;
-			regs[Reg::a3] = 1;
+			regs[Reg::a3] = 0;
 			break;
 
 		case 4288: // openat
-			cout << mmu.read_string(regs[Reg::a1]) << endl;
-			die("openat\n");
+			regs[Reg::v0] = sys_openat(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3]
+			);
+			//die("openat\n");
 			break;
 
 		default:
@@ -208,20 +311,20 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_unimplemented, // 011 110
 	&Emulator::inst_special3,      // 011 111
 	&Emulator::inst_lb,            // 100 000
-	&Emulator::inst_unimplemented, // 100 001
-	&Emulator::inst_unimplemented, // 100 010
+	&Emulator::inst_lh,            // 100 001
+	&Emulator::inst_lwl,           // 100 010
 	&Emulator::inst_lw,            // 100 011
-	&Emulator::inst_unimplemented, // 100 100
+	&Emulator::inst_lbu,           // 100 100
 	&Emulator::inst_lhu,           // 100 101
-	&Emulator::inst_unimplemented, // 100 110
+	&Emulator::inst_lwr,           // 100 110
 	&Emulator::inst_unimplemented, // 100 111
-	&Emulator::inst_unimplemented, // 101 000
-	&Emulator::inst_unimplemented, // 101 001
-	&Emulator::inst_unimplemented, // 101 010
+	&Emulator::inst_sb,            // 101 000
+	&Emulator::inst_sh,            // 101 001
+	&Emulator::inst_swl,           // 101 010
 	&Emulator::inst_sw,            // 101 011
 	&Emulator::inst_unimplemented, // 101 100
 	&Emulator::inst_unimplemented, // 101 101
-	&Emulator::inst_unimplemented, // 101 110
+	&Emulator::inst_swr,           // 101 110
 	&Emulator::inst_unimplemented, // 101 111
 	&Emulator::inst_unimplemented, // 110 000
 	&Emulator::inst_unimplemented, // 110 001
@@ -245,7 +348,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_sll,           // 000 000
 	&Emulator::inst_unimplemented, // 000 001
-	&Emulator::inst_unimplemented, // 000 010
+	&Emulator::inst_srl,           // 000 010
 	&Emulator::inst_unimplemented, // 000 011
 	&Emulator::inst_unimplemented, // 000 100
 	&Emulator::inst_unimplemented, // 000 101
@@ -688,7 +791,7 @@ void Emulator::inst_rdhwr(uint32_t val){
 	uint32_t hwr = 0;
 	switch (inst.d){
 		case 29: // 0b11101, User Local Register
-			die("tls");
+			die("tls\n");
 			break;
 
 		default:
@@ -760,6 +863,89 @@ void Emulator::inst_seh(uint32_t val){
 	uint16_t value = get_reg(inst.t);
 	set_reg(inst.d, (int32_t)(int16_t)value);
 }
+
+void Emulator::inst_srl(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, get_reg(inst.t) >> inst.S);
+}
+
+void Emulator::inst_lh(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	set_reg(inst.t, (int32_t)mmu.read<int16_t>(addr));
+}
+
+void Emulator::inst_lbu(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	set_reg(inst.t, mmu.read<uint8_t>(addr));
+}
+
+
+void Emulator::inst_lwl(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	vaddr_t offset = addr & 3; // offset into aligned word
+
+	printf("0x%X\n", addr);
+
+	// Locurote. Look at the manual
+	uint32_t reg = get_reg(inst.t);
+	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
+	memcpy((char*)(&reg)+3-offset, &w, offset+1);
+	set_reg(inst.t, reg);
+}
+
+void Emulator::inst_lwr(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	vaddr_t offset = addr & 3; // offset into aligned word
+
+	// Locurote. Look at the manual
+	uint32_t reg = get_reg(inst.t);
+	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
+	memcpy(&reg, (char*)(&w)+offset, 4-offset);
+	set_reg(inst.t, reg);
+}
+
+void Emulator::inst_sb(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	mmu.write<uint8_t>(addr, get_reg(inst.t));
+}
+
+void Emulator::inst_sh(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	mmu.write<uint16_t>(addr, get_reg(inst.t));
+}
+
+void Emulator::inst_swl(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	vaddr_t offset = addr & 3; // offset into aligned word
+
+	// Locurote. Look at the manual
+	uint32_t reg = get_reg(inst.t);
+	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
+	memcpy(&w, (char*)(&reg)+3-offset, offset+1);
+	mmu.write<uint32_t>(addr & ~3, w);
+	die("swl\n");
+}
+
+void Emulator::inst_swr(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	vaddr_t offset = addr & 3; // offset into aligned word
+
+	// Locurote. Look at the manual
+	uint32_t reg = get_reg(inst.t);
+	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
+	memcpy((char*)(&w)+offset, &reg, 4-offset);
+	mmu.write<uint32_t>(addr & ~3, w);
+	die("swl\n");
+}
+
 
 const char* regs_map[] = {
 	"00",  "at", "v0", "v1",

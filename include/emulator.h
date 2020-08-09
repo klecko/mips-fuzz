@@ -5,10 +5,32 @@
 #include "mmu.h"
 
 // Implement prefetch properly
+// Fix sbrk
 
 class Emulator;
 typedef void (Emulator::*const inst_handler_t)(uint32_t);
 typedef void (Emulator::*breakpoint_t)();
+
+enum Reg {
+	zero, at, v0, v1, a0, a1, a2, a3,
+	t0,   t1, t2, t3, t4, t5, t6, t7,
+	s0,   s1, s2, s3, s4, s5, s6, s7,
+	t8,   t9, k0, k1, gp, sp, fp, ra,
+};
+
+struct guest_iovec {
+	vaddr_t iov_base;
+	vsize_t iov_len;
+};
+
+struct guest_uname {
+	char sysname[65];
+	char nodename[65];
+	char release[65];
+	char version[65];
+	char machine[65];
+	//char domainname[65];
+};
 
 class Emulator {
 	private:
@@ -32,6 +54,15 @@ class Emulator {
 		void sbrk_bp();
 
 		/* uint32_t sys_brk(vaddr_t addr); */
+		uint32_t sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flags,
+		                    uint32_t& error);
+		uint32_t sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
+		                    uint32_t& error);
+		vaddr_t sys_mmap2(vaddr_t addr, vsize_t length, uint32_t prot,
+		                  uint32_t flags, uint32_t fd, uint32_t pgoffset,
+		                  uint32_t& error);
+		uint32_t sys_uname(vaddr_t addr, uint32_t& error);
+
 		void handle_syscall(uint32_t syscall);
 
 		void run_inst();
@@ -47,6 +78,10 @@ class Emulator {
 
 		void set_pc(vaddr_t addr);
 		uint32_t get_pc();
+
+		// Push an element to the stack
+		template<class T>
+		void push_stack(T val);
 
 		// Forks the emulator and returns the child
 		Emulator fork();
@@ -115,8 +150,22 @@ class Emulator {
 		void inst_nor(uint32_t);
 		void inst_bshfl(uint32_t);
 		void inst_seh(uint32_t);
-
+		void inst_srl(uint32_t);
+		void inst_lh(uint32_t);
+		void inst_lbu(uint32_t);
+		void inst_lwl(uint32_t);
+		void inst_lwr(uint32_t);
+		void inst_sb(uint32_t);
+		void inst_sh(uint32_t);
+		void inst_swl(uint32_t);
+		void inst_swr(uint32_t);
 };
+
+template<class T>
+void Emulator::push_stack(T val){
+	regs[Reg::sp] -= sizeof(T);
+	mmu.write<T>(regs[Reg::sp], val);
+}
 
 struct inst_R_t {
 	uint8_t s;

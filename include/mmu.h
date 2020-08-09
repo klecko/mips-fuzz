@@ -155,6 +155,7 @@ void Mmu::write(vaddr_t addr, T value){
 	if (addr % sizeof(T) != 0)
 		throw Fault(Fault::Type::MisalignedWrite, addr);
 	write_mem(addr, &value, sizeof(T));
+	//printf("%d\n", sizeof(T));
 }
 
 #endif
