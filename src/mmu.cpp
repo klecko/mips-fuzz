@@ -71,15 +71,21 @@ vaddr_t Mmu::get_brk(){
 
 bool Mmu::set_brk(vaddr_t new_brk){
 	// Checks
-	if (new_brk < brk)
-		die("attempt to reduce brk to 0x%X, current is 0x%X\n", new_brk, brk);
+	if (new_brk < min_brk)
+		die("attempt to set brk before min_brk to 0x%X, current is 0x%X and "
+		    "min is 0x%X\n", new_brk, brk, min_brk);
 	if (new_brk > max_brk)
 		die("attempt to set brk past max_brk to 0x%X, current is 0x%X and max "
 		    "is 0x%X\n", new_brk, brk, max_brk);
 
-	// Zero out the new memory and set perms
-	memset(memory + brk, 0, new_brk - brk);
-	set_perms(brk, new_brk - brk, PERM_READ|PERM_WRITE|PERM_INIT);
+	if (new_brk >= brk){
+		// Allocating memory. Zero out the new memory and set perms
+		memset(memory + brk, 0, new_brk - brk);
+		set_perms(brk, new_brk - brk, PERM_READ|PERM_WRITE|PERM_INIT);
+	} else {
+		// Reducing brk. Set perms
+		set_perms(new_brk, brk - new_brk, 0);
+	}
 
 	// Set new brk and return success
 	brk = new_brk;
@@ -133,8 +139,6 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 	for (; addr < addr_end; addr++){
 		if ((perms[addr] & perm) != perm){ 
 			// Permission error. Determine which
-			if (addr == 0x49a4a8)
-				printf("%X %X\n", perm, perms[addr]);
 			if (perm == PERM_WRITE)
 				throw Fault(Fault::Type::Write, addr);
 			else if (perm == PERM_EXEC)
@@ -202,7 +206,7 @@ vaddr_t Mmu::alloc(vsize_t size){
 	// Update next allocation
 	next_alloc += aligned_size;
 
-	printf("alloc(0x%X) --> 0x%X\n", size, current_alloc);
+	dbgprintf("alloc(0x%X) --> 0x%X\n", size, current_alloc);
 	return current_alloc;
 }
 
@@ -242,6 +246,10 @@ void Mmu::reset(const Mmu& other){
 
 	dirty_blocks.clear();
 	next_alloc = other.next_alloc;
+	stack      = other.stack;
+	brk        = other.brk;
+	min_brk    = other.min_brk;
+	max_brk    = other.max_brk;
 }
 
 uint8_t parse_perm(const string& flag){
@@ -258,7 +266,7 @@ uint8_t parse_perm(const string& flag){
 void Mmu::load_elf(const vector<segment_t>& segments){
 	for (const segment_t& s : segments){
 		if (s.segment_type == "LOAD"){
-			printf("Loading at 0x%X\n", s.segment_virtaddr);
+			dbgprintf("Loading at 0x%X\n", s.segment_virtaddr);
 
 			if (s.segment_virtaddr + s.segment_memsize > memory_len)
 				die("Not enough space for loading elf (trying to load at 0x%X, "
@@ -284,8 +292,9 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 	}
 	// Set next_alloc past brk area
 	max_brk    = brk + MAX_BRK_SZ;
+	min_brk    = brk;
 	next_alloc = max_brk;
-	printf("initial brk: 0x%X, max brk: 0x%X, initial alloc: 0x%X\n",
+	dbgprintf("initial brk: 0x%X, max brk: 0x%X, initial alloc: 0x%X\n",
 	        brk, max_brk, next_alloc);
 }
 

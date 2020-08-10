@@ -45,7 +45,7 @@ class Mmu {
 		static const uint8_t PERM_WRITE = (1 << 1); // Can be written
 		static const uint8_t PERM_EXEC  = (1 << 2); // Can be executed
 		static const uint8_t PERM_INIT  = (1 << 3); // Has been initialized
-		static const vsize_t MAX_BRK_SZ = 0x2000;
+		static const vsize_t MAX_BRK_SZ = 0x50000;
 
 	private:
 		// Guest virtual memory
@@ -63,10 +63,10 @@ class Mmu {
 		vaddr_t  stack;
 
 		// Brk is handled as an area after last loaded segment, and before
-		// custom allocations with alloc. Its max value is max_brk, where
-		// custom allocations start
+		// custom allocations with alloc. Its max value is where custom
+		// allocations start, and its min value is its initial value
 		vaddr_t  brk;
-		vaddr_t  max_brk;
+		vaddr_t  min_brk, max_brk;
 
 		// Holds the index of every dirty block
 		std::vector<vaddr_t> dirty_blocks;

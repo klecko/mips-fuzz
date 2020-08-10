@@ -88,11 +88,11 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 
 	// Set entry
 	pc = elf.get_entry();
-	printf("Entry 0x%X\n", pc);
+	dbgprintf("Entry 0x%X\n", pc);
 
 	// Allocate the stack
 	regs[Reg::sp] = mmu.alloc_stack(2 * 1024 * 1024);
-	printf("Allocated stack at 0x%X\n", regs[Reg::sp]);
+	dbgprintf("Allocated stack at 0x%X\n", regs[Reg::sp]);
 
 	push_stack(0);
 
@@ -163,36 +163,19 @@ void Emulator::test_bp(){
 	die("test bp\n");
 }
 
-void Emulator::sbrk_bp(){
-	int32_t increment = regs[Reg::a0];
-	if (increment < 0)
-		die("sbrk neg size: %d\n", increment);
-
-	// Perform allocation. Warning: this can be done only once
-	vaddr_t addr = mmu.alloc(increment);
-
-	// Special allocation: zeroed and marked as initialized
-	for (int i = 0; i < increment; i++)
-		mmu.write<uint8_t>(addr + i, 0);
-
-	regs[Reg::v0] = addr;
-	pc = regs[Reg::ra];
-	printf("sbrk(%d) --> 0x%X\n", increment, addr);
-}
-
 void Emulator::malloc_bp(){
 	vsize_t size = regs[Reg::a0];
 	vaddr_t addr = (size > 0 ? mmu.alloc(size) : 0);
 	regs[Reg::v0] = addr;
 	pc = regs[Reg::ra];
-	printf("malloc(%u) --> 0x%X\n", size, addr);
+	dbgprintf("malloc(%u) --> 0x%X\n", size, addr);
 }
 
 void Emulator::free_bp(){
 	//die("free_bp\n");
 	vsize_t addr = regs[Reg::a0];
 	pc = regs[Reg::ra];
-	printf("free(0x%X)\n", addr);
+	dbgprintf("free(0x%X)\n", addr);
 }
 
 void Emulator::realloc_bp(){
@@ -225,7 +208,7 @@ uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){
 	// Attempt to change brk
 	error = !mmu.set_brk(new_brk);
 	brk   = (error ? brk : new_brk);
-	printf("brk(0x%X) --> 0x%X\n", new_brk, brk);
+	dbgprintf("brk(0x%X) --> 0x%X\n", new_brk, brk);
 	return brk;
 }
 
@@ -233,7 +216,6 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
                               uint32_t& error)
 {
 	string pathname = mmu.read_string(pathname_addr);
-	cout << "Trying to open " << pathname << " as " << flags << endl;
 
 	// Find unused fd
 	uint32_t fd = 3;
@@ -248,12 +230,12 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 		// God, forgive me for this casting.
 		File input_file(fd, flags, (char*)input, input_sz);
 		open_files[fd] = input_file;
-		error = 0;
-		return fd;
-	}
+	} else
+		die("Unimplemented openat\n");
 
-	die("Unimplemented openat\n");
-	return 0;
+	dbgprintf("openat(%d, %s, %d) --> %d\n", dirfd, pathname.c_str(), flags, fd);
+	error = 0;
+	return fd;
 }
 
 uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
@@ -279,7 +261,7 @@ uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
 		char buf[iov_len + 1];
 		mmu.read_mem(buf, iov_base, iov_len);
 		buf[iov_len] = 0;
-		printf("output: %s\n", buf);
+		dbgprintf("output: %s\n", buf);
 		bytes_written += iov_len;
 	}
 
@@ -305,29 +287,29 @@ uint32_t Emulator::sys_uname(vaddr_t addr, uint32_t& error){
 		"mips"      // machine
 	};
 	mmu.write_mem(addr, &uname, sizeof(uname));
+	dbgprintf("uname(0x%X) --> 0\n", addr);
 	error = 0;
 	return 0;
 }
 
-uint32_t Emulator::sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
-		                        vaddr_t bufsize, uint32_t& error)
+uint32_t Emulator::sys_readlink(vaddr_t path_addr, vaddr_t buf_addr,
+		                        vsize_t bufsize, uint32_t& error)
 {
-	string pathname = mmu.read_string(pathname_addr);
-	if (pathname == "/proc/self/exe"){
+	uint32_t written = 0;
+	string path = mmu.read_string(path_addr);
+	if (path == "/proc/self/exe"){
 		char s[] = "/home/klecko/my_fuzzer";
-		if (bufsize < sizeof(s)){
+		if (bufsize < sizeof(s))
 			die("error readlink\n");
-			error = 1;
-			return -1;
-		}
 		mmu.write_mem(buf_addr, s, sizeof(s));
-		error = 0;
-		return sizeof(s);
-	}
+		written = sizeof(s);
+	} else
+		die("Unimplemented readlink\n");
 	
-	cout << pathname <<  endl;
-	die("Unimplemented readlink\n");
-	return 0;
+	dbgprintf("readlink(%s, 0x%X, %d) --> %d\n", path.c_str(), buf_addr, 
+	          bufsize, written);
+	error = 0;
+	return written;
 }
 
 uint32_t Emulator::sys_read(uint32_t fd, vaddr_t buf_addr, vsize_t count,
@@ -359,11 +341,12 @@ uint32_t Emulator::sys_read(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 
 	// Read
 	char* cursor = f.get_cursor();
-	count = f.move_cursor(count);
-	mmu.write_mem(buf_addr, cursor, count);
+	vsize_t real_count = f.move_cursor(count);
+	mmu.write_mem(buf_addr, cursor, real_count);
 
+	dbgprintf("read(%d, 0x%X, %d) --> %d\n", fd, buf_addr, count, real_count);
 	error = 0;
-	return count;
+	return real_count;
 }
 
 uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
@@ -380,7 +363,7 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 			char buf[count + 1];
 			mmu.read_mem(buf, buf_addr, count);
 			buf[count] = 0;
-			printf("output:\n%s\n", buf);
+			dbgprintf("output:\n%s\n", buf);
 			error = 0;
 			return count;
 	}
@@ -396,16 +379,18 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 
 	// Write
 	char* cursor = f.get_cursor();
-	count = f.move_cursor(count);
-	mmu.read_mem(cursor, buf_addr, count);
+	vsize_t real_count = f.move_cursor(count);
+	mmu.read_mem(cursor, buf_addr, real_count);
 
+	dbgprintf("read(%d, 0x%X, %d) --> %d\n", fd, buf_addr, count, real_count);
 	error = 0;
-	return count;
+	return real_count;
 }
 
 uint32_t Emulator::sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
                                uint32_t& error)
 {
+	dbgprintf("fstat64(%d, 0x%X) --> -1\n", fd, statbuf_addr);
 	error = 1;
 	return -1;
 }
@@ -421,6 +406,7 @@ uint32_t Emulator::sys_close(uint32_t fd, uint32_t& error){
 	open_files.erase(open_files.find(fd));
 
 end:
+	dbgprintf("close(%d)\n", fd);
 	error = 0;
 	return 0;
 }
@@ -430,7 +416,8 @@ void Emulator::handle_syscall(uint32_t syscall){
 		case 4001: // exit
 		case 4246: // exit_group
 			running = false;
-			die("EXIT\n");
+			printf("EXIT %d\n", regs[Reg::a0]);
+			//die("EXIT\n");
 			break;
 
 		case 4003: // read
@@ -508,9 +495,8 @@ void Emulator::handle_syscall(uint32_t syscall){
 			break;
 
 		case 4283: // set_thread_area
-			//die("set_thread_area(0x%X)\n", regs[Reg::a0]);
 			tls = regs[Reg::a0];
-			printf("set tls --> 0x%X\n", tls);
+			dbgprintf("set tls --> 0x%X\n", tls);
 			regs[Reg::v0] = 0;
 			regs[Reg::a3] = 0;
 			break;
@@ -842,10 +828,13 @@ void Emulator::run_inst(){
 	// Handle breakpoint. It may change pc
 	if (breakpoints.count(pc))
 		(this->*breakpoints.at(pc))();
+	/* auto bp = breakpoints.find(pc);
+	if (bp != breakpoints.end())
+		(this->*(bp->second))(); */
 
 	uint32_t inst   = mmu.read<uint32_t>(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
-	//printf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
+	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
 	// If needed, take the branch after fetching the current instruction
 	// Otherwise, just increment PC so it points to the next instruction
@@ -1058,7 +1047,6 @@ void Emulator::inst_rdhwr(uint32_t val){
 			if (!tls)
 				die("not set tls\n");
 			hwr = tls;
-			//printf("get tls --> 0x%X\n", tls);
 			break;
 
 		default:

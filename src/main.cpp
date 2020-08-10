@@ -24,7 +24,7 @@ int main(){
 			runner.run(input);
 		} catch (const Fault& f) {
 			cout << "[PC: 0x" << hex << runner.get_pc() << "] " << f << endl;
-			// Save input as a crash
+			// future: Save input as a crash
 		}
 		runner.reset(emu);
 	}

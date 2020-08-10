@@ -79,7 +79,6 @@ class Emulator {
 
 		// Breakpoints
 		void test_bp();
-		void sbrk_bp();
 		void malloc_bp();   // __libc_malloc
 		void free_bp();     // __free
 		void realloc_bp();  // __libc_realloc
@@ -98,7 +97,7 @@ class Emulator {
 		                  uint32_t flags, uint32_t fd, uint32_t pgoffset,
 		                  uint32_t& error);
 		uint32_t sys_uname(vaddr_t addr, uint32_t& error);
-		uint32_t sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
+		uint32_t sys_readlink(vaddr_t path_addr, vaddr_t buf_addr,
 		                      vsize_t bufsize, uint32_t& error);
 		uint32_t sys_read(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 		                  uint32_t& error);
