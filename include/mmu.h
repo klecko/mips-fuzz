@@ -15,12 +15,6 @@ Maybe reduce unnecesary sanity checks
 Solve chapuza of typedefs in elf_parser.hpp
 */
 
-// Type used for guest virtual addresses
-typedef uint32_t vaddr_t;
-
-// Type used for indexing guest virtual address
-typedef vaddr_t vsize_t;
-
 // Fault: everything that will end the execution abruptly and will be considered
 // as a crash
 struct Fault : public std::exception {
@@ -152,19 +146,20 @@ class Mmu {
 
 template<class T>
 T Mmu::read(vaddr_t addr){
-	if (addr % sizeof(T) != 0)
-		throw Fault(Fault::Type::MisalignedRead, addr);
 	T result;
 	read_mem(&result, addr, sizeof(T));
+	// Perfom this check the last as it is the least important
+	if (addr % sizeof(T) != 0)
+		throw Fault(Fault::Type::MisalignedRead, addr);
 	return result;
 }
 
 template<class T>
 void Mmu::write(vaddr_t addr, T value){
+	write_mem(addr, &value, sizeof(T));
+	// Perfom this check the last as it is the least important
 	if (addr % sizeof(T) != 0)
 		throw Fault(Fault::Type::MisalignedWrite, addr);
-	write_mem(addr, &value, sizeof(T));
-	//printf("%d\n", sizeof(T));
 }
 
 #endif

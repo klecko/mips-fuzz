@@ -32,6 +32,8 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	jump_addr = 0;
 	tls       = 0;
 	running   = false;
+	input     = NULL;
+	input_sz  = 0;
 	load_elf(filepath, argv);
 }
 
@@ -63,13 +65,16 @@ Emulator Emulator::fork(){
 void Emulator::reset(const Emulator& other){
 	mmu.reset(other.mmu);
 	memcpy(regs, other.regs, sizeof(regs));
-	hi = other.hi;
-	lo = other.lo;
-	pc = other.pc;
-	condition = other.condition;
-	jump_addr = other.jump_addr;
-	tls       = other.tls;
-	running   = other.running;
+	hi         = other.hi;
+	lo         = other.lo;
+	pc         = other.pc;
+	condition  = other.condition;
+	jump_addr  = other.jump_addr;
+	tls        = other.tls;
+	running    = other.running;
+	input      = other.input;
+	input_sz   = other.input_sz;
+	open_files = other.open_files;
 }
 
 
@@ -184,7 +189,10 @@ void Emulator::malloc_bp(){
 }
 
 void Emulator::free_bp(){
-	die("free_bp\n");
+	//die("free_bp\n");
+	vsize_t addr = regs[Reg::a0];
+	pc = regs[Reg::ra];
+	printf("free(0x%X)\n", addr);
 }
 
 void Emulator::realloc_bp(){
@@ -227,10 +235,21 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 	string pathname = mmu.read_string(pathname_addr);
 	cout << "Trying to open " << pathname << " as " << flags << endl;
 
-	// Just return stdout for now
-	if (pathname == "/dev/tty"){
+	// Find unused fd
+	uint32_t fd = 3;
+	while (open_files.count(fd))
+		fd++;
+
+	// Create input file
+	if (pathname == "input_file"){
+		if (flags == O_RDWR || flags == O_WRONLY)
+			die("opening input file with write permissions");
+		
+		// God, forgive me for this casting.
+		File input_file(fd, flags, (char*)input, input_sz);
+		open_files[fd] = input_file;
 		error = 0;
-		return STDOUT_FILENO;
+		return fd;
 	}
 
 	die("Unimplemented openat\n");
@@ -240,6 +259,7 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
                               uint32_t& error)
 {
+	die("writev\n");
 	if (fd != STDOUT_FILENO)
 		die("sys_writev trying to write to fd %d\n", fd);
 
@@ -273,6 +293,7 @@ vaddr_t Emulator::sys_mmap2(vaddr_t addr, vsize_t length, uint32_t prot,
 {
 	die("mmap2(0x%X, 0x%X, 0x%X, 0x%X, %d, 0x%X)\n", addr, length, prot,
 	    flags, fd, pgoffset);
+	return 0;
 }
 
 uint32_t Emulator::sys_uname(vaddr_t addr, uint32_t& error){
@@ -291,7 +312,6 @@ uint32_t Emulator::sys_uname(vaddr_t addr, uint32_t& error){
 uint32_t Emulator::sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
 		                        vaddr_t bufsize, uint32_t& error)
 {
-	printf("buf=0x%X, bufsize=%d\n", buf_addr, bufsize);
 	string pathname = mmu.read_string(pathname_addr);
 	if (pathname == "/proc/self/exe"){
 		char s[] = "/home/klecko/my_fuzzer";
@@ -307,13 +327,133 @@ uint32_t Emulator::sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
 	
 	cout << pathname <<  endl;
 	die("Unimplemented readlink\n");
+	return 0;
+}
+
+uint32_t Emulator::sys_read(uint32_t fd, vaddr_t buf_addr, vsize_t count,
+                            uint32_t& error)
+{
+	// Stdin, stdout and stderr
+	switch (fd){
+		case STDIN_FILENO:
+			die("reading from stdin\n");
+			break;
+
+		case STDOUT_FILENO:
+			die("reading from stdout?\n");
+			break;
+
+		case STDERR_FILENO:
+			die("reading from stderr?\n");
+			break;
+	}
+
+	// Check if file is open
+	if (!open_files.count(fd))
+		die("reading from not used fd\n");
+
+	// Check if file is readable
+	File& f = open_files[fd];
+	if (!f.is_readable())
+		die("reading from non readable fd\n");
+
+	// Read
+	char* cursor = f.get_cursor();
+	count = f.move_cursor(count);
+	mmu.write_mem(buf_addr, cursor, count);
+
+	error = 0;
+	return count;
+}
+
+uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
+                             uint32_t& error)
+{
+	// Stdin, stdout and stderr
+	switch (fd){
+		case STDIN_FILENO:
+			die("writing to stdin?\n");
+			break;
+
+		case STDOUT_FILENO:
+		case STDERR_FILENO:
+			char buf[count + 1];
+			mmu.read_mem(buf, buf_addr, count);
+			buf[count] = 0;
+			printf("output:\n%s\n", buf);
+			error = 0;
+			return count;
+	}
+
+	// Check if file is open
+	if (!open_files.count(fd))
+		die("writing to not used fd\n");
+
+	// Check if file is writable
+	File& f = open_files[fd];
+	if (!f.is_writable())
+		die("writing to non writable fd\n");
+
+	// Write
+	char* cursor = f.get_cursor();
+	count = f.move_cursor(count);
+	mmu.read_mem(cursor, buf_addr, count);
+
+	error = 0;
+	return count;
+}
+
+uint32_t Emulator::sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
+                               uint32_t& error)
+{
+	error = 1;
+	return -1;
+}
+
+uint32_t Emulator::sys_close(uint32_t fd, uint32_t& error){
+	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO)
+		goto end;
+
+	// Check if file is open
+	if (!open_files.count(fd))
+		die("closing to not used fd %u\n", fd);
+	
+	open_files.erase(open_files.find(fd));
+
+end:
+	error = 0;
+	return 0;
 }
 
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
 		case 4001: // exit
+		case 4246: // exit_group
 			running = false;
 			die("EXIT\n");
+			break;
+
+		case 4003: // read
+			regs[Reg::v0] = sys_read(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3]
+			);
+			break;
+		
+		case 4004: // write
+			regs[Reg::v0] = sys_write(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3]
+			);
+			break;
+
+
+		case 4006: // close
+			regs[Reg::v0] = sys_close(regs[Reg::a0], regs[Reg::a3]);
 			break;
 
 		case 4045: // brk
@@ -360,6 +500,11 @@ void Emulator::handle_syscall(uint32_t syscall){
 				mmu.read<uint32_t>(regs[Reg::sp]+20),
 				regs[Reg::a3]
 			);
+			break;
+
+		case 4215: // fstat64
+			regs[Reg::v0] = 
+				sys_fstat64(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
 			break;
 
 		case 4283: // set_thread_area
@@ -482,7 +627,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_unimplemented, // 010 111
 	&Emulator::inst_mult,          // 011 000
 	&Emulator::inst_multu,         // 011 001
-	&Emulator::inst_unimplemented, // 011 010
+	&Emulator::inst_div,           // 011 010
 	&Emulator::inst_divu,          // 011 011
 	&Emulator::inst_unimplemented, // 011 100
 	&Emulator::inst_unimplemented, // 011 101
@@ -700,7 +845,7 @@ void Emulator::run_inst(){
 
 	uint32_t inst   = mmu.read<uint32_t>(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
-	printf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
+	//printf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
 	// If needed, take the branch after fetching the current instruction
 	// Otherwise, just increment PC so it points to the next instruction
@@ -866,6 +1011,15 @@ void Emulator::inst_teq(uint32_t val){
 		die("TRAP\n");
 }
 
+void Emulator::inst_div(uint32_t val){
+	inst_R_t inst(val);
+	int32_t dividend  = get_reg(inst.s);
+	int32_t divisor   = get_reg(inst.t);
+	hi = dividend % divisor; // module
+	lo = dividend / divisor; // quotient
+}
+
+
 void Emulator::inst_divu(uint32_t val){
 	inst_R_t inst(val);
 	uint32_t dividend  = get_reg(inst.s);
@@ -904,7 +1058,7 @@ void Emulator::inst_rdhwr(uint32_t val){
 			if (!tls)
 				die("not set tls\n");
 			hwr = tls;
-			printf("get tls --> 0x%X\n", tls);
+			//printf("get tls --> 0x%X\n", tls);
 			break;
 
 		default:
@@ -962,6 +1116,10 @@ void Emulator::inst_nor(uint32_t val){
 
 void Emulator::inst_bshfl(uint32_t val){
 	switch ((val >> 6) & 0b11111){
+		case 0b10000: // seb
+			inst_seb(val);
+			break;
+
 		case 0b11000: // seh
 			inst_seh(val);
 			break;
@@ -975,6 +1133,12 @@ void Emulator::inst_seh(uint32_t val){
 	inst_R_t inst(val);
 	uint16_t value = get_reg(inst.t);
 	set_reg(inst.d, (int32_t)(int16_t)value);
+}
+
+void Emulator::inst_seb(uint32_t val){
+	inst_R_t inst(val);
+	uint16_t value = get_reg(inst.t);
+	set_reg(inst.d, (int32_t)(int8_t)value);
 }
 
 void Emulator::inst_srl(uint32_t val){

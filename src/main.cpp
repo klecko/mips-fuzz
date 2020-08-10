@@ -11,6 +11,7 @@ Adapt the elf parser to my code
 */
 
 int main(){
+	srand(time(NULL));
 	Corpus corpus("../corpus");
 	Emulator emu(8 * 1024 * 1024, "../test_bins/xxd/xxd",
 	             {"xxd", "input_file"});

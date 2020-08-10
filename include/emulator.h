@@ -3,9 +3,16 @@
 
 #include <unordered_map>
 #include "mmu.h"
+#include "file.h"
 
 // Implement prefetch properly
 // Fix sbrk
+/* Idea: memory loaded files appart from input file. 
+Map filename -> <pointer, size>
+std::unordered_map<std::string, std::pair<char*, size_t>> loaded_files;
+
+AÑADIR IFDEF A TODOS LOS .H
+*/
 
 class Emulator;
 typedef void (Emulator::*const inst_handler_t)(uint32_t);
@@ -60,6 +67,9 @@ class Emulator {
 		const char* input;
 		size_t      input_sz;
 
+		// Open files appart from stdin, stdout and stderr
+		std::unordered_map<int, File> open_files;
+
 		// Breakpoints hash table
 		static const std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
 
@@ -89,7 +99,14 @@ class Emulator {
 		                  uint32_t& error);
 		uint32_t sys_uname(vaddr_t addr, uint32_t& error);
 		uint32_t sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
-		                      vaddr_t bufsize, uint32_t& error);
+		                      vsize_t bufsize, uint32_t& error);
+		uint32_t sys_read(uint32_t fd, vaddr_t buf_addr, vsize_t count,
+		                  uint32_t& error);
+		uint32_t sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
+		                   uint32_t& error);
+		uint32_t sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
+		                     uint32_t& error);
+		uint32_t sys_close(uint32_t fd, uint32_t& error);
 
 		void handle_syscall(uint32_t syscall);
 
@@ -159,6 +176,7 @@ class Emulator {
 		void inst_movz(uint32_t);
 		void inst_subu(uint32_t);
 		void inst_teq(uint32_t);
+		void inst_div(uint32_t);
 		void inst_divu(uint32_t);
 		void inst_mflo(uint32_t);
 		void inst_mul(uint32_t);
@@ -176,6 +194,7 @@ class Emulator {
 		void inst_nor(uint32_t);
 		void inst_bshfl(uint32_t);
 		void inst_seh(uint32_t);
+		void inst_seb(uint32_t);
 		void inst_srl(uint32_t);
 		void inst_lh(uint32_t);
 		void inst_lbu(uint32_t);
