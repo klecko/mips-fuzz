@@ -51,6 +51,7 @@ class Mmu {
 		static const uint8_t PERM_WRITE = (1 << 1); // Can be written
 		static const uint8_t PERM_EXEC  = (1 << 2); // Can be executed
 		static const uint8_t PERM_INIT  = (1 << 3); // Has been initialized
+		static const vsize_t MAX_BRK_SZ = 0x2000;
 
 	private:
 		// Guest virtual memory
@@ -66,6 +67,12 @@ class Mmu {
 		// Virtual address of the top of the stack region, if allocated
 		// Don't confuse with emulator stack pointer
 		vaddr_t  stack;
+
+		// Brk is handled as an area after last loaded segment, and before
+		// custom allocations with alloc. Its max value is max_brk, where
+		// custom allocations start
+		vaddr_t  brk;
+		vaddr_t  max_brk;
 
 		// Holds the index of every dirty block
 		std::vector<vaddr_t> dirty_blocks;
@@ -103,6 +110,10 @@ class Mmu {
 		friend void swap(Mmu& first, Mmu& second);
 
 		Mmu& operator=(Mmu other);
+
+		// Get current brk. Attempt to set new brk, performing size checks
+		vaddr_t get_brk();
+		bool set_brk(vaddr_t new_brk);
 
 		// Allocates a block of `size` bytes. Default perms are RW
 		vaddr_t alloc(vsize_t size);

@@ -53,9 +53,18 @@ class Emulator {
 		static const std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
 
 		// Breakpoints
+		void test_bp();
 		void sbrk_bp();
+		void malloc_bp();   // __libc_malloc
+		void free_bp();     // __free
+		void realloc_bp();  // __libc_realloc
+		void memalign_bp(); // __libc_memalign
+		void valloc_bp();   // __libc_valloc
+		void pvalloc_bp();  // pvalloc
+		void calloc_bp();   // __calloc
 
-		/* uint32_t sys_brk(vaddr_t addr); */
+		// Syscalls
+		uint32_t sys_brk(vaddr_t new_brk, uint32_t& error);
 		uint32_t sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flags,
 		                    uint32_t& error);
 		uint32_t sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,

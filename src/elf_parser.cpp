@@ -27,6 +27,16 @@ long Elf_parser::get_entry() {
     return ((Elf_Ehdr*)m_mmap_program)->e_entry;
 }
 
+phinfo_t Elf_parser::get_phinfo(){
+    Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;
+    phinfo_t result = {
+        ehdr->e_phoff,
+        ehdr->e_phentsize,
+        ehdr->e_phnum
+    };
+    return result;
+}
+
 std::vector<section_t> Elf_parser::get_sections() {
     Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;
     Elf_Shdr *shdr = (Elf_Shdr*)(m_mmap_program + ehdr->e_shoff);
@@ -46,13 +56,12 @@ std::vector<section_t> Elf_parser::get_sections() {
         section.section_size = shdr[i].sh_size;
         section.section_ent_size = shdr[i].sh_entsize;
         section.section_addr_align = shdr[i].sh_addralign; 
-        
         sections.push_back(section);
     }
     return sections;
 }
 
-std::vector<segment_t> Elf_parser::get_segments() {
+std::vector<segment_t> Elf_parser::get_segments(Elf32_Addr& load_addr) {
     Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;
     Elf_Phdr *phdr = (Elf_Phdr*)(m_mmap_program + ehdr->e_phoff);
     int phnum = ehdr->e_phnum;
@@ -61,6 +70,7 @@ std::vector<segment_t> Elf_parser::get_segments() {
     Elf_Shdr *sh_strtab = &shdr[ehdr->e_shstrndx];
     const char *const sh_strtab_p = (char*)m_mmap_program + sh_strtab->sh_offset;
 
+    load_addr = UINT32_MAX;
     std::vector<segment_t> segments;
     for (int i = 0; i < phnum; ++i) {
         segment_t segment;
@@ -74,6 +84,8 @@ std::vector<segment_t> Elf_parser::get_segments() {
         segment.segment_align    = phdr[i].p_align;
         segment.data             = m_mmap_program+segment.segment_offset;
         segments.push_back(segment);
+        if (segment.segment_virtaddr < load_addr)
+            load_addr = segment.segment_virtaddr;
     }
     return segments;
 }
@@ -204,11 +216,11 @@ void Elf_parser::load_memory_map() {
 
     auto header = (Elf_Ehdr*)m_mmap_program;
     if (header->e_ident[EI_CLASS] != ELFCLASS) {
-        #ifdef BITS32
+        //#ifdef BITS32 // FIXME
         printf("ERROR: elf_parser compiled for 32 bits trying to load 64 bits binary\n");
-        #else
-        printf("ERROR: elf_parser compiled for 64 bits trying to load 32 bits binary\n");
-        #endif
+        //#else
+        //printf("ERROR: elf_parser compiled for 64 bits trying to load 32 bits binary\n");
+        //#endif
         exit(1);
     }
 }

@@ -16,6 +16,8 @@ Mmu::Mmu(){
 	perms      = NULL;
 	next_alloc = 0;
 	stack      = 0;
+	brk        = 0;
+	max_brk    = 0;
 } 
 
 Mmu::Mmu(vsize_t mem_size){
@@ -24,6 +26,8 @@ Mmu::Mmu(vsize_t mem_size){
 	perms      = new uint8_t[mem_size];
 	next_alloc = 0;
 	stack      = 0;
+	brk        = 0;
+	max_brk    = 0;
 	dirty_bitmap.resize(memory_len/DIRTY_BLOCK_SIZE + 1, false);
 	memset(memory, 0, mem_size);
 	memset(perms, 0, mem_size);
@@ -35,6 +39,8 @@ Mmu::Mmu(const Mmu& other){
 	perms        = new uint8_t[memory_len];
 	next_alloc   = other.next_alloc;
 	stack        = other.stack;
+	brk          = other.brk;
+	max_brk      = other.max_brk;
 	dirty_blocks = vector<vaddr_t>(other.dirty_blocks);
 	dirty_bitmap = vector<bool>(other.dirty_bitmap);
 	memcpy(memory, other.memory, memory_len);
@@ -62,8 +68,31 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.perms, second.perms);
 	swap(first.next_alloc, second.next_alloc);
 	swap(first.stack, second.stack);
+	swap(first.brk, second.brk);
+	swap(first.max_brk, second.max_brk);
 	swap(first.dirty_blocks, second.dirty_blocks);
 	swap(first.dirty_bitmap, second.dirty_bitmap);
+}
+
+vaddr_t Mmu::get_brk(){
+	return brk;
+}
+
+bool Mmu::set_brk(vaddr_t new_brk){
+	// Checks
+	if (new_brk < brk)
+		die("attempt to reduce brk to 0x%X, current is 0x%X\n", new_brk, brk);
+	if (new_brk > max_brk)
+		die("attempt to set brk past max_brk to 0x%X, current is 0x%X and max "
+		    "is 0x%X\n", new_brk, brk, max_brk);
+
+	// Zero out the new memory and set perms
+	memset(memory + brk, 0, new_brk - brk);
+	set_perms(brk, new_brk - brk, PERM_READ|PERM_WRITE|PERM_INIT);
+
+	// Set new brk and return success
+	brk = new_brk;
+	return true;
 }
 
 void Mmu::check_bounds(vaddr_t addr, vsize_t len){
@@ -256,12 +285,17 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 			uint8_t perm = parse_perm(s.segment_flags);
 			set_perms(s.segment_virtaddr, s.segment_memsize, perm);
 
-			// Update next allocation beyond any segment we load
+			// Update brk beyond any segment we load
 			vaddr_t segm_next_page = 
 				s.segment_virtaddr + s.segment_memsize + 0xFFF & ~0xFFF;
-			next_alloc = max(next_alloc, segm_next_page);
+			brk = max(brk, segm_next_page);
 		}
 	}
+	// Set next_alloc past brk area
+	max_brk    = brk + MAX_BRK_SZ;
+	next_alloc = max_brk;
+	printf("initial brk: 0x%X, max brk: 0x%X, initial alloc: 0x%X\n",
+	        brk, max_brk, next_alloc);
 }
 
 ostream& operator<<(ostream& os, const Mmu& mmu){

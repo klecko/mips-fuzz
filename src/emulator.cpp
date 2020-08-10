@@ -10,7 +10,15 @@
 using namespace std;
 
 const std::unordered_map<vaddr_t, breakpoint_t> Emulator::breakpoints = {
-	{0x0042b1a0, &Emulator::sbrk_bp},
+	//{0x0042b1a0, &Emulator::sbrk_bp},
+	{0x00423f00, &Emulator::malloc_bp},
+	{0x00424634, &Emulator::free_bp},
+	{0x004248d8, &Emulator::realloc_bp},
+	{0x00424d20, &Emulator::memalign_bp},
+	{0x00424d3c, &Emulator::valloc_bp},
+	{0x00424db8, &Emulator::pvalloc_bp},
+	{0x00424e64, &Emulator::calloc_bp},
+	//{0x00403ea4, &Emulator::test_bp},
 };
 
 /* Emulator::Emulator(): {
@@ -72,7 +80,8 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
 	// I add random numbers at the bottom of the stack for auxv
 	Elf_parser elf(pathname);
-	mmu.load_elf(elf.get_segments());
+	vaddr_t load_addr;
+	mmu.load_elf(elf.get_segments(load_addr));
 
 	// Set entry
 	pc = elf.get_entry();
@@ -104,9 +113,14 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 
 	// Set up auxp. We don't use push_stack or mmu.write because of
 	// misalignment checks
+	phinfo_t phinfo = elf.get_phinfo();
 	Elf32_auxv_t auxv[] = {
-		{AT_RANDOM, random_bytes}, // Address of 16 random bytes
-		{AT_NULL, 0},
+		{AT_RANDOM, random_bytes},               // Address of 16 random bytes
+		{AT_EXECFN, argv_vm[0]},                 // Filename of the program
+	/* 	{AT_PHDR,   load_addr + phinfo.e_phoff}, // Pointer to program headers
+		{AT_PHENT,  phinfo.e_phentsize},         // Size of each entry
+		{AT_PHNUM,  phinfo.e_phnum},   */           // Number of entries
+		{AT_NULL,   0},                          // Auxv end
 	};
 	regs[Reg::sp] -= sizeof(auxv);
 	mmu.write_mem(regs[Reg::sp], auxv, sizeof(auxv));
@@ -132,6 +146,10 @@ void Emulator::run(){
 	}
 }
 
+void Emulator::test_bp(){
+	die("test bp\n");
+}
+
 void Emulator::sbrk_bp(){
 	int32_t increment = regs[Reg::a0];
 	if (increment < 0)
@@ -149,19 +167,51 @@ void Emulator::sbrk_bp(){
 	printf("sbrk(%d) --> 0x%X\n", increment, addr);
 }
 
-/* uint32_t Emulator::sys_brk(vaddr_t addr){
+void Emulator::malloc_bp(){
+	vsize_t size = regs[Reg::a0];
+	vaddr_t addr = (size > 0 ? mmu.alloc(size) : 0);
+	regs[Reg::v0] = addr;
+	pc = regs[Reg::ra];
+	printf("malloc(%u) --> 0x%X\n", size, addr);
+}
+
+void Emulator::free_bp(){
+	die("free_bp\n");
+}
+
+void Emulator::realloc_bp(){
+	die("realloc_bp\n");
+}
+
+void Emulator::memalign_bp(){
+	die("memalign_bp\n");
+}
+
+void Emulator::valloc_bp(){
+	die("valloc_bp\n");
+}
+
+void Emulator::pvalloc_bp(){
+	die("pvalloc_bp\n");
+}
+
+void Emulator::calloc_bp(){
+	die("calloc_bp\n");
+}
+
+uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){
 	vaddr_t brk = mmu.get_brk();
 
 	// Attempt to get current brk
-	if (!addr)
+	if (!new_brk)
 		return brk;
 
 	// Attempt to change brk
-	mmu.set_brk(addr);
-
-	// If we got here change was successful
-	return addr;
-} */
+	error = !mmu.set_brk(new_brk);
+	brk   = (error ? brk : new_brk);
+	printf("brk(0x%X) --> 0x%X\n", new_brk, brk);
+	return brk;
+}
 
 uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flags,
                               uint32_t& error)
@@ -253,6 +303,10 @@ uint32_t Emulator::sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
 
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
+		case 4045: // brk
+			regs[Reg::v0] = sys_brk(regs[Reg::a0], regs[Reg::a3]);
+			break;
+
 		case 4024: // getuid
 		case 4047: // getgid
 		case 4049: // geteuid
@@ -801,10 +855,10 @@ void Emulator::inst_teq(uint32_t val){
 
 void Emulator::inst_divu(uint32_t val){
 	inst_R_t inst(val);
-	uint32_t div  = get_reg(inst.s);
-	uint32_t quot = get_reg(inst.t);
-	hi = div / quot;
-	lo = div % quot;
+	uint32_t dividend  = get_reg(inst.s);
+	uint32_t divisor   = get_reg(inst.t);
+	hi = dividend % divisor; // module
+	lo = dividend / divisor; // quotient
 }
 
 void Emulator::inst_mflo(uint32_t val){
@@ -1069,9 +1123,10 @@ void Emulator::inst_mult(uint32_t val){
 
 void Emulator::inst_multu(uint32_t val){
 	inst_R_t inst(val);
-	uint64_t result = get_reg(inst.s) * get_reg(inst.t);
+	uint64_t result = (uint64_t)get_reg(inst.s) * get_reg(inst.t);
 	lo = result & 0xFFFFFFFF;
 	hi = (result >> 32) & 0xFFFFFFFF;
+	//die("%X * %X = %lX (%X | %X)\n", get_reg(inst.s), get_reg(inst.t), result, hi, lo);
 }
 
 void Emulator::inst_mfhi(uint32_t val){

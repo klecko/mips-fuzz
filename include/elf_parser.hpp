@@ -44,6 +44,7 @@
 #define Elf_Rela Elf32_Rela
 #define Elf_Word Elf32_Word
 #define Elf_Half Elf32_Half
+#define Elf_Off  Elf32_Off
 #define ELF_ST_TYPE ELF32_ST_TYPE
 #define ELF_ST_BIND ELF32_ST_BIND
 #define ELF_ST_VISIBILITY ELF32_ST_VISIBILITY
@@ -60,6 +61,7 @@
 #define Elf_Rela Elf64_Rela
 #define Elf_Word Elf64_Word
 #define Elf_Half Elf64_Half
+#define Elf_Off  Elf64_Off
 #define ELF_ST_TYPE ELF64_ST_TYPE
 #define ELF_ST_BIND ELF64_ST_BIND
 #define ELF_ST_VISIBILITY ELF64_ST_VISIBILITY
@@ -76,6 +78,11 @@ typedef uint32_t vaddr_t;
 // Type used for indexing guest virtual address
 typedef vaddr_t vsize_t;
 
+typedef struct {
+    Elf_Off	 e_phoff;      /* Program header table file offset */
+    Elf_Half e_phentsize;  /* Program header table entry size */
+    Elf_Half e_phnum;      /* Program header table entry count */
+} phinfo_t;
 
 typedef struct {
     int section_index = 0; 
@@ -113,8 +120,9 @@ class Elf_parser {
             load_memory_map();
         }
         long get_entry();
+        phinfo_t get_phinfo();
         std::vector<section_t> get_sections();
-        std::vector<segment_t> get_segments();
+        std::vector<segment_t> get_segments(Elf32_Addr& load_addr);
         std::vector<symbol_t> get_symbols();
         std::vector<relocation_t> get_relocations();
         uint8_t *get_memory_map();
