@@ -138,11 +138,11 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 void Emulator::run(){
 	while (true){
 		run_inst();
-		cout << *this << endl;
-		if (pc == 0x4014a4){
+		//cout << *this << endl;
+		/* if (pc == 0x4014a4){
 			cout << "MAIN" << endl;
 			break;
-		}
+		} */
 	}
 }
 
@@ -225,7 +225,7 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 		return STDOUT_FILENO;
 	}
 
-	die("Unimplemented openat");
+	die("Unimplemented openat\n");
 	return 0;
 }
 
@@ -436,7 +436,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_unimplemented, // 111 010
 	&Emulator::inst_unimplemented, // 111 011
 	&Emulator::inst_unimplemented, // 111 100
-	&Emulator::inst_unimplemented, // 111 101
+	&Emulator::inst_sdc1,          // 111 101
 	&Emulator::inst_unimplemented, // 111 110
 	&Emulator::inst_unimplemented, // 111 111
 };
@@ -446,7 +446,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_sll,           // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_srl,           // 000 010
-	&Emulator::inst_unimplemented, // 000 011
+	&Emulator::inst_sra,           // 000 011
 	&Emulator::inst_sllv,          // 000 100
 	&Emulator::inst_unimplemented, // 000 101
 	&Emulator::inst_unimplemented, // 000 110
@@ -1150,6 +1150,15 @@ void Emulator::inst_ext(uint32_t val){
 	uint32_t size = inst.d + 1;
 	uint32_t mask = (1 << (size+1)) - 1;
 	set_reg(inst.t, (get_reg(inst.s) >> lsb) & mask);
+}
+
+void Emulator::inst_sra(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, (int32_t)get_reg(inst.t) >> inst.S);
+}
+
+void Emulator::inst_sdc1(uint32_t val){
+	// Forget about floats for now
 }
 
 const char* regs_map[] = {

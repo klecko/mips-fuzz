@@ -12,7 +12,7 @@ Adapt the elf parser to my code
 int main(){
 	Emulator emu(8 * 1024 * 1024);
 	try {
-		emu.load_elf("../test_bins/xxd/xxd", {"hola", "adios"});
+		emu.load_elf("../test_bins/xxd/xxd", {"hola", "input_file"});
 	} catch (const Fault& f) {
 		cout << "Unexepected fault loading elf: " << f << endl;
 		exit(EXIT_FAILURE);

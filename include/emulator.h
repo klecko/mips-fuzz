@@ -187,6 +187,8 @@ class Emulator {
 		void inst_mthi(uint32_t);
 		void inst_mtlo(uint32_t);
 		void inst_ext(uint32_t);
+		void inst_sra(uint32_t);
+		void inst_sdc1(uint32_t);
 };
 
 template<class T>
