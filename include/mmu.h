@@ -97,9 +97,7 @@ class Mmu {
 		void check_perms(vaddr_t addr, vsize_t len, uint8_t perm);
 
 	public:
-		Mmu();
-
-		Mmu(vsize_t mem_size);
+		Mmu(vsize_t mem_size = 0);
 
 		Mmu(const Mmu& other);
 

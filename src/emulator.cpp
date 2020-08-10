@@ -21,14 +21,9 @@ const std::unordered_map<vaddr_t, breakpoint_t> Emulator::breakpoints = {
 	//{0x00403ea4, &Emulator::test_bp},
 };
 
-/* Emulator::Emulator(): {
-	memset(regs, 0, sizeof(regs));
-	hi = 0;
-	lo = 0;
-	pc = 0;
-} */
-
-Emulator::Emulator(vsize_t mem_size): mmu(mem_size) {
+Emulator::Emulator(vsize_t mem_size, const string& filepath,
+                   const vector<string>& argv): mmu(mem_size)
+{
 	memset(regs, 0, sizeof(regs));
 	hi = 0;
 	lo = 0;
@@ -36,6 +31,8 @@ Emulator::Emulator(vsize_t mem_size): mmu(mem_size) {
 	condition = false;
 	jump_addr = 0;
 	tls       = 0;
+	running   = false;
+	load_elf(filepath, argv);
 }
 
 void Emulator::set_reg(uint8_t reg, uint32_t val){
@@ -72,14 +69,15 @@ void Emulator::reset(const Emulator& other){
 	condition = other.condition;
 	jump_addr = other.jump_addr;
 	tls       = other.tls;
+	running   = other.running;
 }
 
 
-void Emulator::load_elf(const char* pathname, const vector<string>& argv){
+void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	// Stack layout described in
 	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
 	// I add random numbers at the bottom of the stack for auxv
-	Elf_parser elf(pathname);
+	Elf_parser elf(filepath);
 	vaddr_t load_addr;
 	mmu.load_elf(elf.get_segments(load_addr));
 
@@ -135,15 +133,25 @@ void Emulator::load_elf(const char* pathname, const vector<string>& argv){
 }
 
 // Possibilities: Clean exit, timeout, [exception (fault)]
-void Emulator::run(){
-	while (true){
+bool Emulator::run(const string& input){
+	// Save provided input. Internal representation is as const char* and not
+	// as string so we don't have to perform any copy.
+	this->input    = input.c_str();
+	this->input_sz = input.size() + 1;
+
+	// Perform execution recording number of executed instructions
+	uint64_t instr_exec = 0;
+	bool timeout = false;
+	running = true;
+	while (running && !timeout){
 		run_inst();
+		instr_exec++;
+		if (instr_exec == INSTR_TIMEOUT)
+			timeout = true;
 		//cout << *this << endl;
-		/* if (pc == 0x4014a4){
-			cout << "MAIN" << endl;
-			break;
-		} */
 	}
+
+	return timeout;
 }
 
 void Emulator::test_bp(){
@@ -303,6 +311,11 @@ uint32_t Emulator::sys_readlink(vaddr_t pathname_addr, vaddr_t buf_addr,
 
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
+		case 4001: // exit
+			running = false;
+			die("EXIT\n");
+			break;
+
 		case 4045: // brk
 			regs[Reg::v0] = sys_brk(regs[Reg::a0], regs[Reg::a3]);
 			break;
@@ -1126,7 +1139,6 @@ void Emulator::inst_multu(uint32_t val){
 	uint64_t result = (uint64_t)get_reg(inst.s) * get_reg(inst.t);
 	lo = result & 0xFFFFFFFF;
 	hi = (result >> 32) & 0xFFFFFFFF;
-	//die("%X * %X = %lX (%X | %X)\n", get_reg(inst.s), get_reg(inst.t), result, hi, lo);
 }
 
 void Emulator::inst_mfhi(uint32_t val){
@@ -1148,7 +1160,7 @@ void Emulator::inst_ext(uint32_t val){
 	inst_R_t inst(val);
 	uint32_t lsb  = inst.S;
 	uint32_t size = inst.d + 1;
-	uint32_t mask = (1 << (size+1)) - 1;
+	uint32_t mask = (1 << size) - 1;
 	set_reg(inst.t, (get_reg(inst.s) >> lsb) & mask);
 }
 

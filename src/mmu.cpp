@@ -10,15 +10,6 @@
 
 using namespace std;
 
-Mmu::Mmu(){
-	memory     = NULL;
-	memory_len = 0;
-	perms      = NULL;
-	next_alloc = 0;
-	stack      = 0;
-	brk        = 0;
-	max_brk    = 0;
-} 
 
 Mmu::Mmu(vsize_t mem_size){
 	memory     = new uint8_t[mem_size];

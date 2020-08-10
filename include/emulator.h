@@ -34,6 +34,8 @@ struct guest_uname {
 
 class Emulator {
 	private:
+		static const uint64_t INSTR_TIMEOUT = 1000000000;
+
 		// Memory
 		Mmu mmu;
 
@@ -47,10 +49,23 @@ class Emulator {
 		bool      condition;
 		vaddr_t   jump_addr;
 
+		// Address of thread local storage, set by emulated program with
+		// set_thread_area syscall
 		vaddr_t   tls;
+
+		// Is the emulator running?
+		bool      running;
+
+		// Current input and size
+		const char* input;
+		size_t      input_sz;
 
 		// Breakpoints hash table
 		static const std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
+
+		// Load elf into memory, allocate stack and set up argv and company
+		void load_elf(const std::string& filepath,
+		              const std::vector<std::string>& args);
 
 		// Breakpoints
 		void test_bp();
@@ -82,9 +97,8 @@ class Emulator {
 
 
 	public:
-		//Emulator();
-
-		Emulator(vsize_t mem_size);
+		Emulator(vsize_t mem_size, const std::string& filename,
+		         const std::vector<std::string>& argv);
 
 		void set_reg(uint8_t reg, uint32_t val);
 		uint32_t get_reg(uint8_t reg);
@@ -102,10 +116,9 @@ class Emulator {
 		// Resets the emulator to the parent it was previously forked from
 		void reset(const Emulator& other);
 
-		// Load elf into memory, allocate stack and load argv into the stack
-		void load_elf(const char* pathname, const std::vector<std::string>& argv);
-
-		void run();
+		// Perform run with provided input. Returns true if timeout occured
+		// May throw Fault
+		bool run(const std::string& input);
 
 		friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 
@@ -217,7 +230,7 @@ struct inst_RI_t {
 	
 	inst_RI_t(uint32_t inst){
 		s = (inst >> 21) & 0b00011111;
-		C = inst & 0b11111111'11111111;
+		C = inst & 0xFFFF;
 	}
 };
 
@@ -229,15 +242,15 @@ struct inst_I_t {
 	inst_I_t(uint32_t inst){
 		s = (inst >> 21) & 0b00011111;
 		t = (inst >> 16) & 0b00011111;
-		C = inst & 0b11111111'11111111;
+		C = inst & 0xFFFF;
 	}
 };
 
 struct inst_J_t {
 	uint32_t A;
 
-	inst_J_t(uint32_t inst){
-		A = inst & 0b11'11111111'11111111'11111111;
+	inst_J_t(uint32_t inst){ // 26 bits
+		A = inst & 0x3FFFFFF;
 	}
 };
 
