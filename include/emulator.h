@@ -25,6 +25,8 @@ enum Reg {
 	t8,   t9, k0, k1, gp, sp, fp, ra,
 };
 
+struct RunTimeout : std::exception {};
+
 struct guest_iovec {
 	vaddr_t iov_base;
 	vsize_t iov_len;
@@ -135,9 +137,8 @@ class Emulator {
 		// Resets the emulator to the parent it was previously forked from
 		void reset(const Emulator& other);
 
-		// Perform run with provided input. Returns true if timeout occured
-		// May throw Fault
-		bool run(const std::string& input);
+		// Perform run with provided input. May throw Fault or RunTimeout
+		void run(const std::string& input);
 
 		friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 

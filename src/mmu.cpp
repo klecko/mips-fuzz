@@ -5,7 +5,7 @@
 #include "common.h"
 #include "elf_parser.hpp"
 
-#define DIRTY_BLOCK_SIZE 64
+#define DIRTY_BLOCK_SIZE 128
 
 using namespace std;
 

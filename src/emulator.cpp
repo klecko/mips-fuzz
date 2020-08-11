@@ -4,9 +4,9 @@
 #include <unistd.h> // *_FILENO definitions
 #include <linux/limits.h> // PATH_MAX
 #include <string>
+#include "common.h"
 #include "emulator.h"
 #include "elf_parser.hpp"
-#include "common.h"
 
 
 using namespace std;
@@ -148,32 +148,36 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 
 void Emulator::run_inst(){
 	// Handle breakpoint. It may change pc
-	if (breakpoints.count(pc))
+	cycle_t cycles = _rdtsc();
+ 	if (breakpoints.count(pc))
 		(this->*breakpoints.at(pc))();
-	/* auto bp = breakpoints.find(pc);
-	if (bp != breakpoints.end())
-		(this->*(bp->second))(); */
+	stats.bp_cycles += _rdtsc() - cycles;
 
+	cycles = _rdtsc();
 	uint32_t inst   = mmu.read<uint32_t>(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
+	stats.fetch_inst_cycles += _rdtsc() - cycles;
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
 	// If needed, take the branch after fetching the current instruction
 	// Otherwise, just increment PC so it points to the next instruction
+	cycles = _rdtsc();
 	if (condition){
 		pc = jump_addr;
 		condition = false;
-		jump_addr = 0;
 	} else 
 		pc += 4;
+	stats.jump_cycles += _rdtsc() - cycles;
 
 	// Handle current instruction if it isn't a NOP
+	cycles = _rdtsc();
 	if (inst)
 		(this->*inst_handlers[opcode])(inst);
+	stats.inst_handl_cycles += _rdtsc() - cycles;
 }
 
 // Possibilities: Clean exit, timeout, [exception (fault)]
-bool Emulator::run(const string& input){
+void Emulator::run(const string& input){
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
 	this->input    = input.c_str();
@@ -181,17 +185,23 @@ bool Emulator::run(const string& input){
 
 	// Perform execution recording number of executed instructions
 	uint64_t instr_exec = 0;
-	bool timeout = false;
 	running = true;
-	while (running && !timeout){
-		run_inst();
-		instr_exec++;
+	cycle_t cycles;
+	while (running){
+		for (int i = 0; i < 500 && running; i++){
+			cycles = _rdtsc();
+			run_inst();
+			stats.run_inst_cycles += _rdtsc() - cycles;
+		}
+		
+		stats.instr += 500;
+		cycles = _rdtsc();
+		instr_exec += 500;
 		if (instr_exec == INSTR_TIMEOUT)
-			timeout = true;
+			throw RunTimeout();
+		stats.timeout_cycles += _rdtsc() - cycles;
 		//cout << *this << endl;
 	}
-
-	return timeout;
 }
 
 void Emulator::test_bp(){
