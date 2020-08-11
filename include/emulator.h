@@ -11,8 +11,6 @@
 /* Idea: memory loaded files appart from input file. 
 Map filename -> <pointer, size>
 std::unordered_map<std::string, std::pair<char*, size_t>> loaded_files;
-
-AÑADIR IFDEF A TODOS LOS .H
 */
 
 class Emulator;
@@ -83,6 +81,10 @@ class Emulator {
 		void load_elf(const std::string& filepath,
 		              const std::vector<std::string>& args);
 
+		// Push an element to the stack
+		template<class T>
+		void push_stack(T val);
+
 		// Breakpoints
 		void test_bp();
 		void malloc_bp();   // __libc_malloc
@@ -128,10 +130,6 @@ class Emulator {
 		void set_pc(vaddr_t addr);
 		uint32_t get_pc();
 
-		// Push an element to the stack
-		template<class T>
-		void push_stack(T val);
-
 		// Forks the emulator and returns the child
 		Emulator fork();
 
@@ -140,6 +138,10 @@ class Emulator {
 
 		// Perform run with provided input. May throw Fault or RunTimeout
 		void run(const std::string& input, Stats& local_stats);
+
+		// Run emulator until given address, return the number of instructions
+		// executed
+		uint64_t run_until(vaddr_t pc);
 
 		friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 

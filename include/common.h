@@ -6,6 +6,7 @@
 
 #define DEBUG 0
 #define TIMETRACE 0
+#define GUEST_OUTPUT 0
 
 // Type used for guest virtual addresses
 typedef uint32_t vaddr_t;
@@ -17,6 +18,12 @@ typedef vaddr_t vsize_t;
 #define dbgprintf(...) printf(__VA_ARGS__)
 #else
 #define dbgprintf(...) ((void)0)
+#endif
+
+#if GUEST_OUTPUT == 1
+#define guestprintf(...) printf(__VA_ARGS__)
+#else
+#define guestprintf(...) ((void)0)
 #endif
 
 template <class... Args>

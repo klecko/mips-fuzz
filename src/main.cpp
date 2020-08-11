@@ -49,7 +49,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 	}
 }
 
-void print_stats(Stats& stats){
+void print_stats(int nthreads, Stats& stats){
 	uint32_t elapsed = 0;
 	double minstrps, fcps, reset_time, run_time, run_inst_time, inst_handl_time,
 	       fetch_inst_time, jump_time, bp_time, timeout_time;
@@ -68,8 +68,12 @@ void print_stats(Stats& stats){
 		jump_time       = (double)stats.jump_cycles / stats.total_cycles;
 		bp_time         = (double)stats.bp_cycles / stats.total_cycles;
 		timeout_time    = (double)stats.timeout_cycles / stats.total_cycles;
-		printf("[STATS] cases: %lu, minstr/s: %.3f, fcps: %.3f, reset: %.3f, run: %.3f, run_inst: %.3f, inst_handl: %.3f, fetch_inst: %.3f, jump: %.3f, bp: %.3f, timeout: %.3f\n", 
-		       cases, minstrps, fcps, reset_time, run_time, run_inst_time, inst_handl_time, fetch_inst_time, jump_time, bp_time, timeout_time);
+		printf("[%d THREADS] cases: %lu, minstr/s: %.3f, fcps: %.3f, "
+		       "reset: %.3f, run: %.3f, run_inst: %.3f, inst_handl: %.3f, "
+		       "fetch_inst: %.3f, jump: %.3f, bp: %.3f, timeout: %.3f\n",
+		        nthreads, cases, minstrps, fcps, reset_time, run_time,
+			    run_inst_time, inst_handl_time, fetch_inst_time, jump_time,
+			    bp_time, timeout_time);
 	}
 }
 
@@ -78,9 +82,15 @@ int main(){
 	cout << "Threads: " << num_threads << endl;
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
-	Emulator emu(8 * 1024 * 1024, "../test_bins/xxd/xxd",
-	             {"xxd", "input_file"});
-	// future: run emu til main
+	Emulator emu(
+		8 * 1024 * 1024,         // memory
+		"../test_bins/xxd/xxd",  // path to elf
+		{"xxd", "input_file"}    // argv
+	);
+
+	// Run until open before forking
+	uint64_t insts = emu.run_until(0x429e6c);
+	cout << "Executed " << insts << " instructions before forking" << endl;
 
 	// Create worker threads
 	vector<thread> threads;
@@ -89,7 +99,7 @@ int main(){
 		                         ref(stats)));
 	
 	// Create stats thread
-	threads.push_back(thread(print_stats, ref(stats)));
+	threads.push_back(thread(print_stats, num_threads, ref(stats)));
 
 	// Wait for every thread to finish
 	for (thread& t : threads)

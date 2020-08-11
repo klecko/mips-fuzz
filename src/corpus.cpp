@@ -28,7 +28,7 @@ Corpus::Corpus(int nthreads, const string& pathname){
 		ostringstream ss;
 		ss << ifs.rdbuf();
 		corpus.push_back(ss.str());
-		cout << "Read " << ent->d_name << ", size: " << ss.str().size() << endl;
+		cout << "Read file '" << ent->d_name << "', size: " << ss.str().size() << endl;
 	}
 	closedir(dir);
 

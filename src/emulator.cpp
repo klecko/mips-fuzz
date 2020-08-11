@@ -60,6 +60,8 @@ uint32_t Emulator::get_pc(){
 Emulator Emulator::fork(){
 	Emulator new_emu(*this);
 	new_emu.mmu = mmu.fork();
+	//cout << *this << endl;
+	//cout << new_emu << endl;
 	return new_emu;
 }
 
@@ -201,6 +203,15 @@ void Emulator::run(const string& input, Stats& local_stats){
 	}
 }
 
+uint64_t Emulator::run_until(vaddr_t pc){
+	Stats dummy;
+	while (this->pc != pc){
+		run_inst(dummy);
+		dummy.instr++;
+	}
+	return dummy.instr;
+}
+
 void Emulator::test_bp(){
 	die("test bp\n");
 }
@@ -271,7 +282,7 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 		
 		// God, forgive me for this casting.
 		File input_file(fd, flags, (char*)input, input_sz);
-		open_files[fd] = input_file;
+		open_files[fd] = move(input_file);
 	} else
 		die("Unimplemented openat\n");
 
@@ -404,7 +415,7 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 			char buf[count + 1];
 			mmu.read_mem(buf, buf_addr, count);
 			buf[count] = 0;
-			dbgprintf("output:\n%s\n", buf);
+			guestprintf("%s\n", buf);
 			error = 0;
 			return count;
 	}
@@ -576,6 +587,8 @@ ostream& operator<<(ostream& os, const Emulator& emu){
 	}
 	os << "condition: " << emu.condition << "\t"
 	   << "jump addr: " << emu.jump_addr << endl;
+	for (const auto& f : emu.open_files)
+		cout << f.second << endl;
 	os << dec;
 	return os;
 }

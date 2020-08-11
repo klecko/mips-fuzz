@@ -1,5 +1,8 @@
-#include "file.h"
+#include <iostream>
 #include <fcntl.h> // O_* definitions
+#include "file.h"
+
+using namespace std;
 
 File::File(uint32_t fd, uint32_t flags, char* buf, size_t size){
 	this->fd = fd;
@@ -32,4 +35,10 @@ bool File::is_readable(){
 
 bool File::is_writable(){
 	return (flags == O_WRONLY) || (flags == O_RDWR);
+}
+
+ostream& operator<<(ostream& os, const File& f){
+	os << "fd: " << f.fd << ", flags: " << f.flags << ", offset: " << f.offset
+	   << ", size: " << f.size << ", buf: " << hex << (void*)f.buf << dec << endl;
+	return os;
 }

@@ -1,6 +1,7 @@
 #ifndef _FILE_H
 #define _FILE_H
 
+#include <iostream>
 #include <stdint.h>
 #include "common.h"
 
@@ -25,6 +26,8 @@ class File {
 		// Flags
 		bool    is_readable();
 		bool    is_writable();
+
+		friend std::ostream& operator<<(std::ostream& os, const File& emu);
 };
 
 #endif
