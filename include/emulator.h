@@ -74,8 +74,8 @@ class Emulator {
 		// Absolute path to current loaded file, used by sys_readlink
 		std::string elfpath;
 
-		// Breakpoints hash table
-		static const std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
+		// Breakpoints indexed by address/4
+		std::vector<breakpoint_t> breakpoints;
 
 		// Load elf into memory, allocate stack and set up argv and company
 		void load_elf(const std::string& filepath,

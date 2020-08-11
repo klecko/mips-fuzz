@@ -10,18 +10,6 @@
 
 using namespace std;
 
-const std::unordered_map<vaddr_t, breakpoint_t> Emulator::breakpoints = {
-	//{0x0042b1a0, &Emulator::sbrk_bp},
-	{0x00423f00, &Emulator::malloc_bp},
-	{0x00424634, &Emulator::free_bp},
-	{0x004248d8, &Emulator::realloc_bp},
-	{0x00424d20, &Emulator::memalign_bp},
-	{0x00424d3c, &Emulator::valloc_bp},
-	{0x00424db8, &Emulator::pvalloc_bp},
-	{0x00424e64, &Emulator::calloc_bp},
-	//{0x00403ea4, &Emulator::test_bp},
-};
-
 Emulator::Emulator(vsize_t mem_size, const string& filepath,
                    const vector<string>& argv): mmu(mem_size)
 {
@@ -36,6 +24,16 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	input     = NULL;
 	input_sz  = 0;
 	load_elf(filepath, argv);
+
+	// Breakpoints
+	breakpoints.resize(mem_size/4);
+	breakpoints[0x00423f00/4] = &Emulator::malloc_bp;
+	breakpoints[0x00424634/4] = &Emulator::free_bp;
+	breakpoints[0x004248d8/4] = &Emulator::realloc_bp;
+	breakpoints[0x00424d20/4] = &Emulator::memalign_bp;
+	breakpoints[0x00424d3c/4] = &Emulator::valloc_bp;
+	breakpoints[0x00424db8/4] = &Emulator::pvalloc_bp;
+	breakpoints[0x00424e64/4] = &Emulator::calloc_bp;
 }
 
 void Emulator::set_reg(uint8_t reg, uint32_t val){
@@ -150,8 +148,8 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 void Emulator::run_inst(Stats& local_stats){
 	// Handle breakpoint. It may change pc
 	cycle_t cycles = _rdtsc();
- 	if (breakpoints.count(pc))
-		(this->*breakpoints.at(pc))();
+	if (breakpoints[pc/4])
+		(this->*breakpoints[pc/4])();
 	local_stats.bp_cycles += _rdtsc() - cycles;
 
 	cycles = _rdtsc();

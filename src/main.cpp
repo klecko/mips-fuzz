@@ -54,6 +54,7 @@ void print_stats(int nthreads, Stats& stats){
 	double minstrps, fcps, reset_time, run_time, run_inst_time, inst_handl_time,
 	       fetch_inst_time, jump_time, bp_time, timeout_time;
 	uint64_t cases;
+	const char* s = (nthreads > 1 ? "THREADS" : "THREAD");
 	while (true){
 		this_thread::sleep_for(chrono::seconds(1));
 		elapsed++;
@@ -68,10 +69,10 @@ void print_stats(int nthreads, Stats& stats){
 		jump_time       = (double)stats.jump_cycles / stats.total_cycles;
 		bp_time         = (double)stats.bp_cycles / stats.total_cycles;
 		timeout_time    = (double)stats.timeout_cycles / stats.total_cycles;
-		printf("[%d THREADS] cases: %lu, minstr/s: %.3f, fcps: %.3f, "
+		printf("[%d %s] cases: %lu, minstr/s: %.3f, fcps: %.3f, "
 		       "reset: %.3f, run: %.3f, run_inst: %.3f, inst_handl: %.3f, "
 		       "fetch_inst: %.3f, jump: %.3f, bp: %.3f, timeout: %.3f\n",
-		        nthreads, cases, minstrps, fcps, reset_time, run_time,
+		        nthreads, s, cases, minstrps, fcps, reset_time, run_time,
 			    run_inst_time, inst_handl_time, fetch_inst_time, jump_time,
 			    bp_time, timeout_time);
 	}
