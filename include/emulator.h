@@ -70,6 +70,9 @@ class Emulator {
 		// Open files appart from stdin, stdout and stderr
 		std::unordered_map<int, File> open_files;
 
+		// Absolute path to current loaded file, used by sys_readlink
+		std::string elfpath;
+
 		// Breakpoints hash table
 		static const std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
 
@@ -113,7 +116,7 @@ class Emulator {
 
 
 	public:
-		Emulator(vsize_t mem_size, const std::string& filename,
+		Emulator(vsize_t mem_size, const std::string& filepath,
 		         const std::vector<std::string>& argv);
 
 		void set_reg(uint8_t reg, uint32_t val);

@@ -15,6 +15,8 @@ class Corpus {
 
 	public:
 		Corpus(const std::string& pathname);
+		
+		size_t size();
 
 		// Get a new mutated input
 		const std::string& get_new_input();
@@ -24,6 +26,7 @@ class Corpus {
 
 		// Report coverage
 		void last_input_was_nice_thanks();
+
 };
 
 #endif

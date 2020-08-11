@@ -32,6 +32,10 @@ Corpus::Corpus(const string& pathname){
 	cout << "Total files read: " << inputs.size() << endl;
 }
 
+size_t Corpus::size(){
+	return inputs.size();
+}
+
 void Corpus::mutate_input(){
 	for (int i = 0; i < MUTATED_BYTES; i++)
 		mutated_input[rand() % mutated_input.size()] = rand() % 0xFF;

@@ -3,6 +3,7 @@ set (CMAKE_CXX_STANDARD 11)
 
 project(my_fuzzer)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
 set(SOURCE_FILES src/main.cpp src/mmu.cpp src/elf_parser.cpp src/emulator.cpp
                  src/corpus.cpp src/file.cpp src/instr.cpp)
 include_directories(include)

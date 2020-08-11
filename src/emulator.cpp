@@ -2,10 +2,12 @@
 #include <iomanip>
 #include <assert.h>
 #include <unistd.h> // *_FILENO definitions
+#include <linux/limits.h> // PATH_MAX
 #include <string>
 #include "emulator.h"
 #include "elf_parser.hpp"
 #include "common.h"
+
 
 using namespace std;
 
@@ -75,6 +77,7 @@ void Emulator::reset(const Emulator& other){
 	input      = other.input;
 	input_sz   = other.input_sz;
 	open_files = other.open_files;
+	elfpath    = other.elfpath;
 }
 
 
@@ -86,12 +89,18 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	vaddr_t load_addr;
 	mmu.load_elf(elf.get_segments(load_addr));
 
+	// Save absolute file path. Ugly conversions here
+	char abspath[PATH_MAX];
+	if (!realpath(filepath.c_str(), abspath))
+		die("error realpath: %s\n", strerror(errno));
+	elfpath.assign(abspath);
+
 	// Set entry
 	pc = elf.get_entry();
 	dbgprintf("Entry 0x%X\n", pc);
 
 	// Allocate the stack
-	regs[Reg::sp] = mmu.alloc_stack(2 * 1024 * 1024);
+	regs[Reg::sp] = mmu.alloc_stack(256 * 1024);
 	dbgprintf("Allocated stack at 0x%X\n", regs[Reg::sp]);
 
 	push_stack(0);
@@ -324,16 +333,15 @@ uint32_t Emulator::sys_readlink(vaddr_t path_addr, vaddr_t buf_addr,
 	uint32_t written = 0;
 	string path = mmu.read_string(path_addr);
 	if (path == "/proc/self/exe"){
-		char s[] = "/home/klecko/my_fuzzer";
-		if (bufsize < sizeof(s))
+		if (bufsize < elfpath.size())
 			die("error readlink\n");
-		mmu.write_mem(buf_addr, s, sizeof(s));
-		written = sizeof(s);
+		mmu.write_mem(buf_addr, elfpath.c_str(), elfpath.size());
+		written = elfpath.size();
 	} else
 		die("Unimplemented readlink\n");
 	
-	dbgprintf("readlink(%s, 0x%X, %d) --> %d\n", path.c_str(), buf_addr, 
-	          bufsize, written);
+	dbgprintf("readlink(%s, 0x%X, %d) --> %d (%s)\n", path.c_str(), buf_addr, 
+	          bufsize, written, elfpath.c_str());
 	error = 0;
 	return written;
 }
@@ -442,8 +450,7 @@ void Emulator::handle_syscall(uint32_t syscall){
 		case 4001: // exit
 		case 4246: // exit_group
 			running = false;
-			printf("EXIT %d\n", regs[Reg::a0]);
-			//die("EXIT\n");
+			dbgprintf("EXIT %d\n", regs[Reg::a0]);
 			break;
 
 		case 4003: // read

@@ -10,7 +10,7 @@ typedef uint32_t vaddr_t;
 // Type used for indexing guest virtual address
 typedef vaddr_t vsize_t;
 
-#define DEBUG 1
+#define DEBUG 0
 
 #if DEBUG == 1
 #define dbgprintf(...) printf(__VA_ARGS__)
