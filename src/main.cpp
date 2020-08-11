@@ -8,6 +8,9 @@ using namespace std;
 
 /* TODO
 Adapt the elf parser to my code
+Faster breakpoints
+Measure perf
+Dividir emulator.cpp en varios archivos: instr.cpp y syscalls.cpp
 */
 
 int main(){

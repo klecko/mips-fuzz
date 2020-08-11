@@ -1,7 +1,6 @@
 #include <iostream>
 #include <cstring>
 #include <iomanip>
-#include <sys/mman.h>
 #include "mmu.h"
 #include "common.h"
 #include "elf_parser.hpp"

@@ -1,7 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <cstring>
+#include <cstring> // strerror
 #include <dirent.h>
 #include "corpus.h"
 #include "common.h"

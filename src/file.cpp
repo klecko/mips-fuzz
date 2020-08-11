@@ -1,5 +1,5 @@
 #include "file.h"
-#include <fcntl.h>
+#include <fcntl.h> // O_* definitions
 
 File::File(uint32_t fd, uint32_t flags, char* buf, size_t size){
 	this->fd = fd;
