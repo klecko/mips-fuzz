@@ -24,16 +24,18 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	input     = NULL;
 	input_sz  = 0;
 	load_elf(filepath, argv);
+	breakpoints_bitmap.resize(mem_size);
 
-	// Breakpoints
-	breakpoints.resize(mem_size/4);
-	breakpoints[0x00423f00/4] = &Emulator::malloc_bp;
-	breakpoints[0x00424634/4] = &Emulator::free_bp;
-	breakpoints[0x004248d8/4] = &Emulator::realloc_bp;
-	breakpoints[0x00424d20/4] = &Emulator::memalign_bp;
-	breakpoints[0x00424d3c/4] = &Emulator::valloc_bp;
-	breakpoints[0x00424db8/4] = &Emulator::pvalloc_bp;
-	breakpoints[0x00424e64/4] = &Emulator::calloc_bp;
+	// Breakpoints can only be set in text, which is between load address and 
+	// initial brk (always?). Divide by 4 because each instruction is 4 bytes
+	breakpoints.resize((mmu.get_brk()-load_addr)/4);
+	set_bp(0x00423f00, &Emulator::malloc_bp);
+	set_bp(0x00424634, &Emulator::free_bp);
+	set_bp(0x004248d8, &Emulator::realloc_bp);
+	set_bp(0x00424d20, &Emulator::memalign_bp);
+	set_bp(0x00424d3c, &Emulator::valloc_bp);
+	set_bp(0x00424db8, &Emulator::pvalloc_bp);
+	set_bp(0x00424e64, &Emulator::calloc_bp);
 }
 
 void Emulator::set_reg(uint8_t reg, uint32_t val){
@@ -85,7 +87,6 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
 	// I add random numbers at the bottom of the stack for auxv
 	Elf_parser elf(filepath);
-	vaddr_t load_addr;
 	mmu.load_elf(elf.get_segments(load_addr));
 
 	// Save absolute file path. Ugly conversions here
@@ -122,17 +123,18 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	// Align sp
 	regs[Reg::sp] = regs[Reg::sp] - 0x3 & ~0x3;
 
-	// Set up auxp. We don't use push_stack or mmu.write because of
-	// misalignment checks
+	// Set up auxp. They aren't necessary, I did them tried to solve something
+	// unrelated.
 	phinfo_t phinfo = elf.get_phinfo();
 	Elf32_auxv_t auxv[] = {
 		{AT_RANDOM, random_bytes},               // Address of 16 random bytes
 		{AT_EXECFN, argv_vm[0]},                 // Filename of the program
-	/* 	{AT_PHDR,   load_addr + phinfo.e_phoff}, // Pointer to program headers
+	 	{AT_PHDR,   load_addr + phinfo.e_phoff}, // Pointer to program headers
 		{AT_PHENT,  phinfo.e_phentsize},         // Size of each entry
-		{AT_PHNUM,  phinfo.e_phnum},   */           // Number of entries
+		{AT_PHNUM,  phinfo.e_phnum},             // Number of entries
 		{AT_NULL,   0},                          // Auxv end
 	};
+	// We don't use push_stack or mmu.write because of misalignment checks.
 	regs[Reg::sp] -= sizeof(auxv);
 	mmu.write_mem(regs[Reg::sp], auxv, sizeof(auxv));
 
@@ -145,11 +147,24 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	push_stack<uint32_t>(argv.size());
 }
 
+void Emulator::set_bp(vaddr_t addr, breakpoint_t bp){
+	size_t i = (addr - load_addr)/4;
+	assert(i < breakpoints.size());
+	breakpoints[i] = bp;
+	breakpoints_bitmap[addr] = true;
+}
+
+breakpoint_t Emulator::get_bp(vaddr_t addr){
+	size_t i = (addr - load_addr)/4;
+	assert(i < breakpoints.size());
+	return breakpoints[i];
+}
+
 void Emulator::run_inst(Stats& local_stats){
 	// Handle breakpoint. It may change pc
 	cycle_t cycles = _rdtsc();
-	if (breakpoints[pc/4])
-		(this->*breakpoints[pc/4])();
+	if (breakpoints_bitmap[pc])
+		(this->*get_bp(pc))();
 	local_stats.bp_cycles += _rdtsc() - cycles;
 
 	cycles = _rdtsc();
