@@ -3,29 +3,37 @@
 
 #include <vector>
 #include <string>
+#include <atomic>
 
 class Corpus {
 	private:
 		static const int MUTATED_BYTES = 1;
 
-		std::vector<std::string> inputs;
-		std::string mutated_input;
+		// Corpus
+		std::vector<std::string> corpus;
 
-		void mutate_input();
+		// Vector with one mutated input for each thread
+		std::vector<std::string> mutated_inputs;
+
+		// Lock for adding elements to `corpus`
+		std::atomic_flag lock;
+
+		// Mutate input in mutated_inputs[id]
+		void mutate_input(int id);
 
 	public:
-		Corpus(const std::string& pathname);
-		
+		Corpus(int nthreads, const std::string& pathname);
+
 		size_t size();
 
 		// Get a new mutated input
-		const std::string& get_new_input();
+		const std::string& get_new_input(int id);
 
 		// Add input to corpus
 		void add_input(const std::string& new_input);
 
 		// Report coverage
-		void last_input_was_nice_thanks();
+		void last_input_was_nice_thanks(int id);
 
 };
 

@@ -4,6 +4,7 @@
 #include "common.h"
 #include "emulator.h"
 #include "corpus.h"
+#include "stats.h"
 
 using namespace std;
 
@@ -14,34 +15,41 @@ Measure perf
 Dividir emulator.cpp en varios archivos: instr.cpp y syscalls.cpp
 */
 
-Stats stats;
+void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
+            Stats& stats)
+{
+	cycle_t cycles_init, cycles;
+	while (true){
+		Stats local_stats;
+		cycles_init = __rdtsc(); // total_cycles, __rdtsc() to avoid noping macro
 
-void worker(Emulator runner, const Emulator& parent, Corpus& corpus){
-	cycle_t total_cycles, cycles;
-	for (int i = 0; i < 10000; i++){
-		total_cycles = _rdtsc();
-		cycles = _rdtsc();
-		try {
-			const string& input = corpus.get_new_input();
-			runner.run(input);
-		} catch (const Fault& f) {
-			cout << "[PC: 0x" << hex << runner.get_pc() << "] " << f << endl;
-			// future: Save input as a crash
-		} catch (const RunTimeout&) {
-			cout << "TIMEOUT" << endl;
+		// Run some time saving stats in local_stats
+		while (__rdtsc() - cycles_init < 5000000){
+			cycles = _rdtsc(); // run_cycles
+			try {
+				const string& input = corpus.get_new_input(id);
+				runner.run(input, local_stats);
+			} catch (const Fault& f) {
+				cout << "[PC: 0x" << hex << runner.get_pc() << "] " << f << endl;
+				// future: Save input as a crash
+			} catch (const RunTimeout&) {
+				cout << "TIMEOUT" << endl;
+			}
+			local_stats.run_cycles += _rdtsc() - cycles;
+			local_stats.cases += 1;
+
+			cycles = _rdtsc(); // reset_cycles
+			runner.reset(parent);
+			local_stats.reset_cycles += _rdtsc() - cycles;
 		}
-		stats.cases += 1;
-		stats.run_cycles += _rdtsc() - cycles;
+		local_stats.total_cycles = __rdtsc() - cycles_init;
 
-		cycles = _rdtsc();
-		runner.reset(parent);
-		stats.reset_cycles += _rdtsc() - cycles;
-
-		stats.total_cycles += _rdtsc() - total_cycles;
+		// Update global stats
+		stats.update(local_stats);
 	}
 }
 
-void print_stats(){
+void print_stats(Stats& stats){
 	uint32_t elapsed = 0;
 	double minstrps, fcps, reset_time, run_time, run_inst_time, inst_handl_time,
 	       fetch_inst_time, jump_time, bp_time, timeout_time;
@@ -49,12 +57,6 @@ void print_stats(){
 	while (true){
 		this_thread::sleep_for(chrono::seconds(1));
 		elapsed++;
-		/* cases          = stats.cases.load();
-		fcps            = (double)cases/elapsed;
-		reset_time      = (double)stats.reset_cycles.load() / stats.total_cycles;
-		bp_time         = (double)stats.bp_cycles.load() / stats.total_cycles;
-		run_time        = (double)stats.run_cycles.load() / stats.total_cycles;
-		input_time      = (double)stats.input_cycles.load() / stats.total_cycles; */
 		cases           = stats.cases;
 		minstrps        = (double)stats.instr / (elapsed * 1000000);
 		fcps            = (double)cases / elapsed;
@@ -72,17 +74,24 @@ void print_stats(){
 }
 
 int main(){
-	srand(time(NULL));
-	Corpus corpus("../corpus");
+	const int num_threads = 8;
+	cout << "Threads: " << num_threads << endl;
+	Stats stats;
+	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(8 * 1024 * 1024, "../test_bins/xxd/xxd",
 	             {"xxd", "input_file"});
 	// future: run emu til main
 
-	//Emulator runner = emu.fork();
-	thread t(worker, emu.fork(), ref(emu), ref(corpus));
+	// Create worker threads
+	vector<thread> threads;
+	for (int i = 0; i < num_threads; i++)
+		threads.push_back(thread(worker, i, emu.fork(), ref(emu), ref(corpus),
+		                         ref(stats)));
+	
+	// Create stats thread
+	threads.push_back(thread(print_stats, ref(stats)));
 
-	thread stats_t(print_stats);
-	t.join();
-	stats_t.join();
-	//worker(emu.fork(), emu, corpus);
+	// Wait for every thread to finish
+	for (thread& t : threads)
+		t.join();
 }

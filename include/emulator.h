@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include "mmu.h"
 #include "file.h"
+#include "stats.h"
 
 // Implement prefetch properly
 // Fix sbrk
@@ -114,7 +115,7 @@ class Emulator {
 
 		void handle_syscall(uint32_t syscall);
 
-		void run_inst();
+		void run_inst(Stats& local_stats);
 
 
 	public:
@@ -138,7 +139,7 @@ class Emulator {
 		void reset(const Emulator& other);
 
 		// Perform run with provided input. May throw Fault or RunTimeout
-		void run(const std::string& input);
+		void run(const std::string& input, Stats& local_stats);
 
 		friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 

@@ -8,7 +8,6 @@
 #include "emulator.h"
 #include "elf_parser.hpp"
 
-
 using namespace std;
 
 const std::unordered_map<vaddr_t, breakpoint_t> Emulator::breakpoints = {
@@ -146,17 +145,17 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	push_stack<uint32_t>(argv.size());
 }
 
-void Emulator::run_inst(){
+void Emulator::run_inst(Stats& local_stats){
 	// Handle breakpoint. It may change pc
 	cycle_t cycles = _rdtsc();
  	if (breakpoints.count(pc))
 		(this->*breakpoints.at(pc))();
-	stats.bp_cycles += _rdtsc() - cycles;
+	local_stats.bp_cycles += _rdtsc() - cycles;
 
 	cycles = _rdtsc();
 	uint32_t inst   = mmu.read<uint32_t>(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
-	stats.fetch_inst_cycles += _rdtsc() - cycles;
+	local_stats.fetch_inst_cycles += _rdtsc() - cycles;
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
 	// If needed, take the branch after fetching the current instruction
@@ -167,39 +166,37 @@ void Emulator::run_inst(){
 		condition = false;
 	} else 
 		pc += 4;
-	stats.jump_cycles += _rdtsc() - cycles;
+	local_stats.jump_cycles += _rdtsc() - cycles;
 
 	// Handle current instruction if it isn't a NOP
 	cycles = _rdtsc();
 	if (inst)
 		(this->*inst_handlers[opcode])(inst);
-	stats.inst_handl_cycles += _rdtsc() - cycles;
+	local_stats.inst_handl_cycles += _rdtsc() - cycles;
 }
 
-// Possibilities: Clean exit, timeout, [exception (fault)]
-void Emulator::run(const string& input){
+void Emulator::run(const string& input, Stats& local_stats){
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
 	this->input    = input.c_str();
-	this->input_sz = input.size() + 1;
+	this->input_sz = input.size();
 
 	// Perform execution recording number of executed instructions
 	uint64_t instr_exec = 0;
 	running = true;
 	cycle_t cycles;
 	while (running){
-		for (int i = 0; i < 500 && running; i++){
-			cycles = _rdtsc();
-			run_inst();
-			stats.run_inst_cycles += _rdtsc() - cycles;
-		}
-		
-		stats.instr += 500;
 		cycles = _rdtsc();
-		instr_exec += 500;
-		if (instr_exec == INSTR_TIMEOUT)
+		run_inst(local_stats);
+		local_stats.run_inst_cycles += _rdtsc() - cycles;
+		
+		local_stats.instr += 1;
+
+		cycles = _rdtsc();
+		instr_exec += 1;
+		if (instr_exec >= INSTR_TIMEOUT)
 			throw RunTimeout();
-		stats.timeout_cycles += _rdtsc() - cycles;
+		local_stats.timeout_cycles += _rdtsc() - cycles;
 		//cout << *this << endl;
 	}
 }
