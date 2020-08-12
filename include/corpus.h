@@ -4,6 +4,26 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <x86intrin.h>
+
+// Used for mutating inputs. We don't use glibc rand() because it uses locks
+// in order to be thread safe. Instead, we implement a simpler algorithm, and
+// each thread will have its own rng.
+class Rng {
+	private:
+		uint64_t state;
+	public:
+		Rng(){
+			state = _rdtsc();
+		}
+		uint64_t rnd(){
+			// xorshif64*
+			state ^= state >> 12;
+			state ^= state << 25;
+			state ^= state >> 27;
+			return state * 2685821657736338717LL;
+		}
+};
 
 class Corpus {
 	private:
@@ -19,7 +39,7 @@ class Corpus {
 		std::atomic_flag lock;
 
 		// Mutate input in mutated_inputs[id]
-		void mutate_input(int id);
+		void mutate_input(int id, Rng& rng);
 
 	public:
 		Corpus(int nthreads, const std::string& pathname);
@@ -27,7 +47,7 @@ class Corpus {
 		size_t size();
 
 		// Get a new mutated input
-		const std::string& get_new_input(int id);
+		const std::string& get_new_input(int id, Rng& rng);
 
 		// Add input to corpus
 		void add_input(const std::string& new_input);

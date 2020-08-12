@@ -60,8 +60,6 @@ uint32_t Emulator::get_pc(){
 Emulator Emulator::fork(){
 	Emulator new_emu(*this);
 	new_emu.mmu = mmu.fork();
-	//cout << *this << endl;
-	//cout << new_emu << endl;
 	return new_emu;
 }
 

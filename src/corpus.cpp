@@ -41,17 +41,16 @@ size_t Corpus::size(){
 	return corpus.size();
 }
 
-void Corpus::mutate_input(int id){
+void Corpus::mutate_input(int id, Rng& rng){
 	string& input = mutated_inputs[id];
 	for (int i = 0; i < MUTATED_BYTES; i++)
-		input[rand() % input.size()] = rand() % 0xFF;
+		input[rng.rnd() % input.size()] = rng.rnd() % 0xFF;
 }
 
-const std::string& Corpus::get_new_input(int id){
-	// Get a random input and mutate it
-	size_t i = rand() % (corpus.size());
-	mutated_inputs[id] = corpus[i]; // performs copy
-	mutate_input(id);
+const std::string& Corpus::get_new_input(int id, Rng& rng){
+	// Copy a random input and mutate it
+	mutated_inputs[id] = corpus[rng.rnd() % corpus.size()];
+	mutate_input(id, rng);
 	return mutated_inputs[id];
 }
 

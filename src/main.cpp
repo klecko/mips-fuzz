@@ -14,6 +14,7 @@ Adapt the elf parser to my code
 void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
             Stats& stats)
 {
+	Rng rng;
 	cycle_t cycles_init, cycles;
 	while (true){
 		Stats local_stats;
@@ -23,7 +24,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 		while (_rdtsc() - cycles_init < 50000000){
 			cycles = rdtsc(); // run_cycles
 			try {
-				const string& input = corpus.get_new_input(id);
+				const string& input = corpus.get_new_input(id, rng);
 				runner.run(input, local_stats);
 
 			} catch (const Fault& f) {
