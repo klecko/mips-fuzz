@@ -9,6 +9,7 @@
 
 /*
 It might be better registering separately dirty memory and dirty perms?
+not spending much time reseting anyway
 
 Maybe reduce unnecesary sanity checks
 
@@ -16,7 +17,7 @@ Solve chapuza of typedefs in elf_parser.hpp
 */
 
 // Fault: everything that will end the execution abruptly and will be considered
-// as a crash
+// a crash
 struct Fault : public std::exception {
 	enum Type {
 		Read,
@@ -68,7 +69,7 @@ class Mmu {
 		vaddr_t  brk;
 		vaddr_t  min_brk, max_brk;
 
-		// Holds the index of every dirty block
+		// Holds the index of every dirty block (addr/DIRTY_BLOCK_SIZE)
 		std::vector<vaddr_t> dirty_blocks;
 
 		// Bitmap for every block, true if dirty

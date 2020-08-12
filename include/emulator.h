@@ -6,8 +6,6 @@
 #include "file.h"
 #include "stats.h"
 
-// Implement prefetch properly
-// Fix sbrk
 /* Idea: memory loaded files appart from input file. 
 Map filename -> <pointer, size>
 std::unordered_map<std::string, std::pair<char*, size_t>> loaded_files;
@@ -42,7 +40,7 @@ struct guest_uname {
 
 class Emulator {
 	private:
-		static const uint64_t INSTR_TIMEOUT = 1000000000;
+		static const uint64_t INSTR_TIMEOUT = 10000000;
 
 		// Memory
 		Mmu mmu;

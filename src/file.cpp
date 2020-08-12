@@ -4,8 +4,7 @@
 
 using namespace std;
 
-File::File(uint32_t fd, uint32_t flags, char* buf, size_t size){
-	this->fd = fd;
+File::File(uint32_t flags, char* buf, size_t size){
 	this->flags = flags;
 	this->buf = buf;
 	this->size = size;
@@ -30,15 +29,15 @@ int32_t File::move_cursor(int32_t increment){
 }
 
 bool File::is_readable(){
-	return (flags == O_RDONLY) || (flags == O_RDWR);
+	return ((flags & O_ACCMODE) == O_RDONLY) || ((flags & O_ACCMODE) == O_RDWR);
 }
 
 bool File::is_writable(){
-	return (flags == O_WRONLY) || (flags == O_RDWR);
+	return ((flags & O_ACCMODE) == O_WRONLY) || (flags == O_RDWR);
 }
 
 ostream& operator<<(ostream& os, const File& f){
-	os << "fd: " << f.fd << ", flags: " << f.flags << ", offset: " << f.offset
-	   << ", size: " << f.size << ", buf: " << hex << (void*)f.buf << dec << endl;
+	os << "flags: " << f.flags << ", offset: " << f.offset << ", size: "
+	   << f.size << ", buf: " << hex << (void*)f.buf << dec << endl;
 	return os;
 }

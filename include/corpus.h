@@ -7,7 +7,7 @@
 
 class Corpus {
 	private:
-		static const int MUTATED_BYTES = 1;
+		static const int MUTATED_BYTES = 4;
 
 		// Corpus
 		std::vector<std::string> corpus;

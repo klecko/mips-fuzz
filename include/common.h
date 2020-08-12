@@ -4,9 +4,10 @@
 #include <cstdio>
 #include <cstdlib>
 
-#define DEBUG 0
-#define TIMETRACE 0
+#define DEBUG        0
+#define TIMETRACE    0
 #define GUEST_OUTPUT 0
+#define SINGLE_RUN   0
 
 // Type used for guest virtual addresses
 typedef uint32_t vaddr_t;

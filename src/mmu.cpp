@@ -97,9 +97,6 @@ void Mmu::check_bounds(vaddr_t addr, vsize_t len){
 }
 
 void Mmu::set_dirty(vaddr_t addr, vsize_t len){
-	// Check out of bounds
-	check_bounds(addr, len);
-
 	// Set dirty those blocks that arent dirty
 	vsize_t block_begin = addr/DIRTY_BLOCK_SIZE;
 	vsize_t block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1;
@@ -112,9 +109,6 @@ void Mmu::set_dirty(vaddr_t addr, vsize_t len){
 }
 
 void Mmu::set_perms(vaddr_t addr, vsize_t len, uint8_t perm){
-	// Check out of bounds
-	check_bounds(addr, len);
-
 	// Set permissions
 	memset(perms+addr, perm, len);
 

@@ -204,7 +204,6 @@ void Emulator::run(const string& input, Stats& local_stats){
 		cycles = _rdtsc();
 		run_inst(local_stats);
 		local_stats.run_inst_cycles += _rdtsc() - cycles;
-		
 		local_stats.instr += 1;
 
 		cycles = _rdtsc();
@@ -281,6 +280,8 @@ uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){
 uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flags,
                               uint32_t& error)
 {
+	/* cout << *this << endl;
+	die(""); */
 	string pathname = mmu.read_string(pathname_addr);
 
 	// Find unused fd
@@ -294,7 +295,7 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 			die("opening input file with write permissions");
 		
 		// God, forgive me for this casting.
-		File input_file(fd, flags, (char*)input, input_sz);
+		File input_file(flags, (char*)input, input_sz);
 		open_files[fd] = move(input_file);
 	} else
 		die("Unimplemented openat\n");
@@ -327,7 +328,7 @@ uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
 		char buf[iov_len + 1];
 		mmu.read_mem(buf, iov_base, iov_len);
 		buf[iov_len] = 0;
-		dbgprintf("output: %s\n", buf);
+		guestprintf("output: %s\n", buf);
 		bytes_written += iov_len;
 	}
 
@@ -428,7 +429,7 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 			char buf[count + 1];
 			mmu.read_mem(buf, buf_addr, count);
 			buf[count] = 0;
-			guestprintf("%s\n", buf);
+			guestprintf("[OUTPUT] %s\n", buf);
 			error = 0;
 			return count;
 	}
@@ -447,7 +448,7 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 	vsize_t real_count = f.move_cursor(count);
 	mmu.read_mem(cursor, buf_addr, real_count);
 
-	dbgprintf("read(%d, 0x%X, %d) --> %d\n", fd, buf_addr, count, real_count);
+	dbgprintf("write(%d, 0x%X, %d) --> %d\n", fd, buf_addr, count, real_count);
 	error = 0;
 	return real_count;
 }
@@ -601,7 +602,7 @@ ostream& operator<<(ostream& os, const Emulator& emu){
 	os << "condition: " << emu.condition << "\t"
 	   << "jump addr: " << emu.jump_addr << endl;
 	for (const auto& f : emu.open_files)
-		cout << f.second << endl;
+		cout << "file fd " << f.first << ": " << f.second << endl;
 	os << dec;
 	return os;
 }
