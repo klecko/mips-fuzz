@@ -91,9 +91,32 @@ bool Mmu::set_brk(vaddr_t new_brk){
 	return true;
 }
 
-void Mmu::check_bounds(vaddr_t addr, vsize_t len){
+void Mmu::check_bounds(vaddr_t addr, vsize_t len, uint8_t perm){
 	if (addr + len > memory_len)
-		throw Fault(Fault::Type::OutOfBounds, addr);
+		switch (perm){
+			case PERM_READ:
+				throw Fault(Fault::Type::OutOfBoundsRead, addr);
+			case PERM_WRITE:
+				throw Fault(Fault::Type::OutOfBoundsWrite, addr);
+			case PERM_EXEC:
+				throw Fault(Fault::Type::OutOfBoundsExec, addr);
+			default:
+				die("wrong perm in check_bounds: %d\n", perm);
+		}
+}
+
+void Mmu::check_alignment(vaddr_t addr, vsize_t align, uint8_t perm){
+	if (addr % align != 0)
+		switch (perm){
+			case PERM_READ:
+				throw Fault(Fault::Type::MisalignedRead, addr);
+			case PERM_WRITE:
+				throw Fault(Fault::Type::MisalignedWrite, addr);
+			case PERM_EXEC:
+				throw Fault(Fault::Type::MisalignedExec, addr);
+			default:
+				die("wrong perm in check_alignment: %d\n", perm);
+		}
 }
 
 void Mmu::set_dirty(vaddr_t addr, vsize_t len){
@@ -128,6 +151,7 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 	if (perm == PERM_READ)
 		perm |= PERM_INIT;
 
+	// Check permission for each address
 	vaddr_t addr_end = addr + len;
 	for (; addr < addr_end; addr++){
 		if ((perms[addr] & perm) != perm){ 
@@ -148,7 +172,7 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 
 void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len){
 	// Check out of bounds
-	check_bounds(src, len);
+	check_bounds(src, len, PERM_READ);
 	
 	// Check perms
 	check_perms(src, len, PERM_READ);
@@ -157,9 +181,10 @@ void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len){
 	memcpy(dst, memory+src, len);
 }
 
+
 void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	// Check out of bounds
-	check_bounds(dst, len);
+	check_bounds(dst, len, PERM_WRITE);
 
 	// Check perms
 	check_perms(dst, len, PERM_WRITE);
@@ -174,6 +199,23 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	// Copy memory
 	memcpy(memory+dst, src, len);
 }
+
+uint32_t Mmu::read_inst(vaddr_t addr){
+	// Check out of bounds
+	check_bounds(addr, 4, PERM_EXEC);
+
+	// Check perms
+	check_perms(addr, 4, PERM_EXEC);
+
+	// Check alignment
+	check_alignment(addr, 4, PERM_EXEC);
+
+	// Read and return instruction
+	uint32_t inst;
+	memcpy(&inst, memory+addr, 4);
+	return inst;
+}
+
 
 string Mmu::read_string(vaddr_t addr){
 	string result = "";
@@ -251,7 +293,7 @@ uint8_t parse_perm(const string& flag){
 		perm |= Mmu::PERM_READ;
 	if (flag.find("W") != string::npos)
 		perm |= Mmu::PERM_WRITE;
-	if (flag.find("X") != string::npos)
+	if (flag.find("E") != string::npos)
 		perm |= Mmu::PERM_EXEC;
 	return perm;
 }
@@ -316,14 +358,23 @@ ostream& operator<<(ostream& os, const Fault& f){
 		case Fault::Type::Uninit:
 			os << "Uninit";
 			break;
-		case Fault::Type::OutOfBounds:
-			os << "OutOfBounds";
+		case Fault::Type::OutOfBoundsRead:
+			os << "OutOfBoundsRead";
+			break;
+		case Fault::Type::OutOfBoundsWrite:
+			os << "OutOfBoundsWrite";
+			break;
+		case Fault::Type::OutOfBoundsExec:
+			os << "OutOfBoundsExec";
 			break;
 		case Fault::Type::MisalignedRead:
 			os << "MisalignedRead";
 			break;
 		case Fault::Type::MisalignedWrite:
 			os << "MisalignedWrite";
+			break;
+		case Fault::Type::MisalignedExec:
+			os << "MisalignedExec";
 			break;
 		default:
 			os << "UnimplementedFault";

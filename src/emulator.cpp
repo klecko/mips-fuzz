@@ -167,7 +167,7 @@ void Emulator::run_inst(Stats& local_stats){
 	local_stats.bp_cycles += _rdtsc() - cycles;
 
 	cycles = rdtsc();
-	uint32_t inst   = mmu.read<uint32_t>(pc);
+	uint32_t inst   = mmu.read_inst(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
 	local_stats.fetch_inst_cycles += rdtsc() - cycles;
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);

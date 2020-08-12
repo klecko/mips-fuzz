@@ -101,8 +101,15 @@ int main(){
 	);
 
 	// Run until open before forking
-	uint64_t insts = emu.run_until(0x423e8c);
-	cout << "Executed " << insts << " instructions before forking" << endl;
+	try {
+		uint64_t insts = emu.run_until(0x423e8c);
+		cout << "Executed " << insts << " instructions before forking" << endl;
+	} catch (const Fault& f) {
+		cout << "Unexpected fault runing before forking" << endl;
+		cout << "[PC: 0x" << hex << emu.get_pc() << "] " << f << endl;
+		return -1;
+	}
+
 
 	// Create worker threads
 	vector<thread> threads;

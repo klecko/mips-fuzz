@@ -24,9 +24,12 @@ struct Fault : public std::exception {
 		Write,
 		Exec,
 		Uninit,
-		OutOfBounds,
+		OutOfBoundsRead,
+		OutOfBoundsWrite,
+		OutOfBoundsExec,
 		MisalignedRead,
 		MisalignedWrite,
+		MisalignedExec,
 	};
 
 	Fault::Type type;
@@ -75,8 +78,13 @@ class Mmu {
 		// Bitmap for every block, true if dirty
 		std::vector<bool>    dirty_bitmap;
 
-		// Checks if range is inside guest memory map
-		void check_bounds(vaddr_t addr, vsize_t len);
+		// Checks if range is inside guest memory map, throwing OutOfBounds*
+		// fault if not
+		void check_bounds(vaddr_t addr, vsize_t len, uint8_t perm);
+
+		// Checks if `addr` is aligned to `align` bytes, throwing Misaligned*
+		// fault if not
+		void check_alignment(vaddr_t addr, vsize_t align, uint8_t perm);
 
 		// Sets region from `addr` to `addr+len` as dirty
 		void set_dirty(vaddr_t addr, vsize_t len);
@@ -87,8 +95,7 @@ class Mmu {
 
 		// Checks that all bytes from `addr` to `addr+len` have `perm`
 		// permission. `perm` should be PERM_READ, PERM_WRITE or PERM_EXEC.
-		// It will throw an exception if permissions are not fulfilled.
-		// Doesn't check out of bounds
+		// Throw an exception if permissions are not fulfilled.
 		void check_perms(vaddr_t addr, vsize_t len, uint8_t perm);
 
 	public:
@@ -115,21 +122,27 @@ class Mmu {
 		// Returns the bottom of the stack (last valid address plus one)
 		vaddr_t alloc_stack(vsize_t size);
 
-		// Read `len` bytes from virtual addr `src` into `dst` checking perms
+		// Read `len` bytes from virtual addr `src` into `dst`.
+		// Checks bounds and perms
 		void read_mem(void* dst, vaddr_t src, vsize_t len);
 
-		// Write `len` bytes from `src` into virtual addr `dst` checking perms
+		// Write `len` bytes from `src` into virtual addr `dst`.
+		// Checks bounds and perms
 		void write_mem(vaddr_t dst, const void* src, vsize_t len);
 
-		// Reads a value from memory checking perms and misalignment
+		// Read and return and instruction from virtual addr `dst`.
+		// Checks bounds, perms and alignment
+		uint32_t read_inst(vaddr_t addr);
+
+		// Reads a value from memory. Checks bounds, perms and alignment
 		template <class T>
 		T read(vaddr_t addr);
 
-		// Writes a value to memory checking perms and misalignment
+		// Writes a value to memory. Checks bounds, perms and alignment
 		template <class T>
 		void write(vaddr_t addr, T value);
 
-		// Read a string from memory. Probably slow af
+		// Read a string from memory. Checks bounds, perms and alignment
 		std::string read_string(vaddr_t addr);
 
 		// Forks the mmu and returns the child
@@ -150,8 +163,7 @@ T Mmu::read(vaddr_t addr){
 	T result;
 	read_mem(&result, addr, sizeof(T));
 	// Perfom this check the last as it is the least important
-	if (addr % sizeof(T) != 0)
-		throw Fault(Fault::Type::MisalignedRead, addr);
+	check_alignment(addr, sizeof(T), PERM_READ);
 	return result;
 }
 
@@ -159,8 +171,7 @@ template<class T>
 void Mmu::write(vaddr_t addr, T value){
 	write_mem(addr, &value, sizeof(T));
 	// Perfom this check the last as it is the least important
-	if (addr % sizeof(T) != 0)
-		throw Fault(Fault::Type::MisalignedWrite, addr);
+	check_alignment(addr, sizeof(T), PERM_WRITE);
 }
 
 #endif
