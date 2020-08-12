@@ -1,6 +1,5 @@
 #include <iostream>
 #include <thread>
-#include <atomic>
 #include "common.h"
 #include "emulator.h"
 #include "corpus.h"
@@ -18,11 +17,11 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 	cycle_t cycles_init, cycles;
 	while (true){
 		Stats local_stats;
-		cycles_init = __rdtsc(); // total_cycles, __rdtsc() to avoid noping macro
+		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid noping macro
 
 		// Run some time saving stats in local_stats
-		while (__rdtsc() - cycles_init < 5000000){
-			cycles = _rdtsc(); // run_cycles
+		while (_rdtsc() - cycles_init < 50000000){
+			cycles = rdtsc(); // run_cycles
 			try {
 				const string& input = corpus.get_new_input(id);
 				runner.run(input, local_stats);
@@ -39,15 +38,15 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			}
 			if (SINGLE_RUN)
 				die("end\n");
-			local_stats.run_cycles += _rdtsc() - cycles;
+			local_stats.run_cycles += rdtsc() - cycles;
 			local_stats.cases++;
 
-			cycles = _rdtsc(); // reset_cycles
+			cycles = rdtsc(); // reset_cycles
 			runner.reset(parent);
-			local_stats.reset_cycles += _rdtsc() - cycles;
+			local_stats.reset_cycles += rdtsc() - cycles;
 		}
-		//  __rdtsc() to avoid noping macro
-		local_stats.total_cycles = __rdtsc() - cycles_init;
+		//  _rdtsc() to avoid noping macro
+		local_stats.total_cycles = _rdtsc() - cycles_init;
 
 		// Update global stats
 		stats.update(local_stats);

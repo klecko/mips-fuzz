@@ -44,9 +44,10 @@ struct Stats {
 	}
 };
 
-#if TIMETRACE == 0
-#undef _rdtsc
-#define _rdtsc() (0)
+#if TIMETRACE == 1
+#define rdtsc _rdtsc
+#else
+#define rdtsc() (0)
 #endif
 
 #endif

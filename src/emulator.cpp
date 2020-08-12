@@ -86,6 +86,7 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	// Stack layout described in
 	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
 	// I add random numbers at the bottom of the stack for auxv
+	cout << "Loading " << filepath << endl;
 	Elf_parser elf(filepath);
 	mmu.load_elf(elf.get_segments(load_addr));
 
@@ -162,32 +163,32 @@ breakpoint_t Emulator::get_bp(vaddr_t addr){
 
 void Emulator::run_inst(Stats& local_stats){
 	// Handle breakpoint. It may change pc
-	cycle_t cycles = _rdtsc();
+	cycle_t cycles = rdtsc();
 	if (breakpoints_bitmap[pc])
 		(this->*get_bp(pc))();
 	local_stats.bp_cycles += _rdtsc() - cycles;
 
-	cycles = _rdtsc();
+	cycles = rdtsc();
 	uint32_t inst   = mmu.read<uint32_t>(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
-	local_stats.fetch_inst_cycles += _rdtsc() - cycles;
+	local_stats.fetch_inst_cycles += rdtsc() - cycles;
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
 	// If needed, take the branch after fetching the current instruction
 	// Otherwise, just increment PC so it points to the next instruction
-	cycles = _rdtsc();
+	cycles = rdtsc();
 	if (condition){
 		pc = jump_addr;
 		condition = false;
 	} else 
 		pc += 4;
-	local_stats.jump_cycles += _rdtsc() - cycles;
+	local_stats.jump_cycles += rdtsc() - cycles;
 
 	// Handle current instruction if it isn't a NOP
-	cycles = _rdtsc();
+	cycles = rdtsc();
 	if (inst)
 		(this->*inst_handlers[opcode])(inst);
-	local_stats.inst_handl_cycles += _rdtsc() - cycles;
+	local_stats.inst_handl_cycles += rdtsc() - cycles;
 }
 
 void Emulator::run(const string& input, Stats& local_stats){
@@ -201,16 +202,16 @@ void Emulator::run(const string& input, Stats& local_stats){
 	running = true;
 	cycle_t cycles;
 	while (running){
-		cycles = _rdtsc();
+		cycles = rdtsc();
 		run_inst(local_stats);
-		local_stats.run_inst_cycles += _rdtsc() - cycles;
+		local_stats.run_inst_cycles += rdtsc() - cycles;
 		local_stats.instr += 1;
 
-		cycles = _rdtsc();
+		cycles = rdtsc();
 		instr_exec += 1;
 		if (instr_exec >= INSTR_TIMEOUT)
 			throw RunTimeout();
-		local_stats.timeout_cycles += _rdtsc() - cycles;
+		local_stats.timeout_cycles += rdtsc() - cycles;
 		//cout << *this << endl;
 	}
 }
