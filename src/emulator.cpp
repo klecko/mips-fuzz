@@ -38,6 +38,10 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	set_bp(0x00424e64, &Emulator::calloc_bp);
 }
 
+vsize_t Emulator::memsize(){
+	return mmu.size();
+}
+
 void Emulator::set_reg(uint8_t reg, uint32_t val){
 	assert(0 <= reg && reg <= 31);
 	if (reg != 0)
@@ -159,7 +163,7 @@ breakpoint_t Emulator::get_bp(vaddr_t addr){
 	return breakpoints[i];
 }
 
-void Emulator::run_inst(Stats& local_stats){
+void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	// Handle breakpoint. It may change pc
 	cycle_t cycles = rdtsc();
 	if (breakpoints_bitmap[pc])
@@ -172,12 +176,17 @@ void Emulator::run_inst(Stats& local_stats){
 	local_stats.fetch_inst_cycles += rdtsc() - cycles;
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
-	// If needed, take the branch after fetching the current instruction
+	// If needed, take the branch after fetching the current instruction.
+	// In that case, add the jump address to the coverage
 	// Otherwise, just increment PC so it points to the next instruction
 	cycles = rdtsc();
 	if (condition){
 		pc = jump_addr;
 		condition = false;
+		if (!cov.bitmap[jump_addr]){
+			cov.bitmap[jump_addr] = true;
+			cov.vec.push_back(jump_addr);
+		}
 	} else 
 		pc += 4;
 	local_stats.jump_cycles += rdtsc() - cycles;
@@ -189,7 +198,7 @@ void Emulator::run_inst(Stats& local_stats){
 	local_stats.inst_handl_cycles += rdtsc() - cycles;
 }
 
-void Emulator::run(const string& input, Stats& local_stats){
+void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
 	this->input    = input.c_str();
@@ -201,7 +210,7 @@ void Emulator::run(const string& input, Stats& local_stats){
 	cycle_t cycles;
 	while (running){
 		cycles = rdtsc();
-		run_inst(local_stats);
+		run_inst(cov, local_stats);
 		local_stats.run_inst_cycles += rdtsc() - cycles;
 		local_stats.instr += 1;
 
@@ -216,8 +225,9 @@ void Emulator::run(const string& input, Stats& local_stats){
 
 uint64_t Emulator::run_until(vaddr_t pc){
 	Stats dummy;
+	cov_t dummy2 = { vector<bool>(memsize(), 0) };
 	while (this->pc != pc){
-		run_inst(dummy);
+		run_inst(dummy2, dummy);
 		dummy.instr++;
 	}
 	return dummy.instr;

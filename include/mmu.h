@@ -16,33 +16,6 @@ Maybe reduce unnecesary sanity checks
 Solve chapuza of typedefs in elf_parser.hpp
 */
 
-// Fault: everything that will end the execution abruptly and will be considered
-// a crash
-struct Fault : public std::exception {
-	enum Type {
-		Read,
-		Write,
-		Exec,
-		Uninit,
-		OutOfBoundsRead,
-		OutOfBoundsWrite,
-		OutOfBoundsExec,
-		MisalignedRead,
-		MisalignedWrite,
-		MisalignedExec,
-	};
-
-	Fault::Type type;
-	vaddr_t     fault_addr;
-
-	Fault(Fault::Type type, vaddr_t fault_addr):
-		type(type), fault_addr(fault_addr)
-		{}
-
-	friend std::ostream& operator<<(std::ostream& os, const Fault& f);
-};
-
-
 class Mmu {
 	public:
 		static const uint8_t PERM_READ  = (1 << 0); // Can be read
@@ -50,6 +23,7 @@ class Mmu {
 		static const uint8_t PERM_EXEC  = (1 << 2); // Can be executed
 		static const uint8_t PERM_INIT  = (1 << 3); // Has been initialized
 		static const vsize_t MAX_BRK_SZ = 0x50000;
+		static const vsize_t DIRTY_BLOCK_SIZE = 128;
 
 	private:
 		// Guest virtual memory
@@ -110,6 +84,8 @@ class Mmu {
 		friend void swap(Mmu& first, Mmu& second);
 
 		Mmu& operator=(Mmu other);
+
+		vsize_t size();
 
 		// Get current brk. Attempt to set new brk, performing size checks
 		vaddr_t get_brk();

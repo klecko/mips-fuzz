@@ -4,11 +4,9 @@
 #include "mmu.h"
 #include "common.h"
 #include "elf_parser.hpp"
-
-#define DIRTY_BLOCK_SIZE 128
+#include "fault.h"
 
 using namespace std;
-
 
 Mmu::Mmu(vsize_t mem_size){
 	memory     = new uint8_t[mem_size];
@@ -62,6 +60,10 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.max_brk, second.max_brk);
 	swap(first.dirty_blocks, second.dirty_blocks);
 	swap(first.dirty_bitmap, second.dirty_bitmap);
+}
+
+vsize_t Mmu::size(){
+	return memory_len;
 }
 
 vaddr_t Mmu::get_brk(){
@@ -341,44 +343,5 @@ ostream& operator<<(ostream& os, const Mmu& mmu){
 		os << setw(2) << setfill('0') << (uint64_t)mmu.memory[i] << " ";
 	}
 	os << dec;
-	return os;
-}
-
-ostream& operator<<(ostream& os, const Fault& f){
-	switch (f.type){
-		case Fault::Type::Read:
-			os << "Read";
-			break;
-		case Fault::Type::Write:
-			os << "Write";
-			break;
-		case Fault::Type::Exec:
-			os << "Exec";
-			break;
-		case Fault::Type::Uninit:
-			os << "Uninit";
-			break;
-		case Fault::Type::OutOfBoundsRead:
-			os << "OutOfBoundsRead";
-			break;
-		case Fault::Type::OutOfBoundsWrite:
-			os << "OutOfBoundsWrite";
-			break;
-		case Fault::Type::OutOfBoundsExec:
-			os << "OutOfBoundsExec";
-			break;
-		case Fault::Type::MisalignedRead:
-			os << "MisalignedRead";
-			break;
-		case Fault::Type::MisalignedWrite:
-			os << "MisalignedWrite";
-			break;
-		case Fault::Type::MisalignedExec:
-			os << "MisalignedExec";
-			break;
-		default:
-			os << "UnimplementedFault";
-	}
-	os << " Fault, fault address = 0x" << hex << f.fault_addr << dec;
 	return os;
 }

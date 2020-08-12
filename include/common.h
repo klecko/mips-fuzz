@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #define DEBUG        0
 #define TIMETRACE    0
@@ -14,6 +15,19 @@ typedef uint32_t vaddr_t;
 
 // Type used for indexing guest virtual address
 typedef vaddr_t vsize_t;
+
+// Structure used for measuring coverage in a single run
+// Take advantage of the bitmap, which is nice for checking if an address has
+// already been visited but is terrible for hashing, and the vector, which is 
+// nice for hashing but is bad for checking if an addres has already been
+// visited
+struct cov_t {
+	std::vector<bool> bitmap;
+	std::vector<vaddr_t> vec;
+	bool operator==(const cov_t& other) const {
+		return vec == other.vec;
+	}
+};
 
 #if DEBUG == 1
 #define dbgprintf(...) printf(__VA_ARGS__)

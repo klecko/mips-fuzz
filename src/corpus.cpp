@@ -32,13 +32,23 @@ Corpus::Corpus(int nthreads, const string& pathname){
 	}
 	closedir(dir);
 
-	lock.clear();
+	lock_corpus.clear();
+	lock_recorded_cov.clear();
+	lock_uniq_crashes.clear();
 	
 	cout << "Total files read: " << corpus.size() << endl;
 }
 
-size_t Corpus::size(){
+size_t Corpus::size() const {
 	return corpus.size();
+}
+
+size_t Corpus::cov_size() const {
+	return recorded_cov.size();
+}
+
+size_t Corpus::uniq_crashes_size() const {
+	return uniq_crashes.size();
 }
 
 void Corpus::mutate_input(int id, Rng& rng){
@@ -47,19 +57,41 @@ void Corpus::mutate_input(int id, Rng& rng){
 		input[rng.rnd() % input.size()] = rng.rnd() % 0xFF;
 }
 
+void Corpus::add_input(const std::string& new_input){
+	while (lock_corpus.test_and_set());
+	corpus.push_back(new_input);
+	lock_corpus.clear();
+}
+
 const std::string& Corpus::get_new_input(int id, Rng& rng){
-	// Copy a random input and mutate it
+	// Copy a random input and mutate it. Is a lock necessary here? shared_mutex
 	mutated_inputs[id] = corpus[rng.rnd() % corpus.size()];
 	mutate_input(id, rng);
 	return mutated_inputs[id];
 }
 
-void Corpus::add_input(const std::string& new_input){
-	while (lock.test_and_set());
-	corpus.push_back(new_input);
-	lock.clear();
+void Corpus::report_cov(int id, const cov_t& cov){
+	while (lock_recorded_cov.test_and_set());
+	if (!recorded_cov.count(cov)){
+		// New coverage, add input to corpus and save coverage
+		add_input(mutated_inputs[id]);
+		recorded_cov[cov] = true;
+	}
+	lock_recorded_cov.clear();
 }
 
-void Corpus::last_input_was_nice_thanks(int id){
-	add_input(mutated_inputs[id]);
+void Corpus::report_crash(vaddr_t pc, const Fault& fault){
+	auto crash = make_pair(pc, fault);
+	while (lock_uniq_crashes.test_and_set());
+
+	// Look for the crash
+	auto it = uniq_crashes.begin();
+	while (it != uniq_crashes.end() && *it != crash) ++it;
+
+	// If it is a new crash, save it and write it to disk (TODO)
+	if (it == uniq_crashes.end()){
+		uniq_crashes.push_back(move(crash));
+		cout << "[PC: 0x" << hex << pc << "] " << fault << endl;
+	}
+	lock_uniq_crashes.clear();
 }

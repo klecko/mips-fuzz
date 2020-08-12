@@ -5,6 +5,7 @@
 #include "mmu.h"
 #include "file.h"
 #include "stats.h"
+#include "common.h"
 
 /* Idea: memory loaded files appart from input file. 
 Map filename -> <pointer, size>
@@ -122,12 +123,14 @@ class Emulator {
 
 		void handle_syscall(uint32_t syscall);
 
-		void run_inst(Stats& local_stats);
+		void run_inst(cov_t& cov, Stats& local_stats);
 
 
 	public:
 		Emulator(vsize_t mem_size, const std::string& filepath,
 		         const std::vector<std::string>& argv);
+
+		vsize_t memsize();
 
 		void set_reg(uint8_t reg, uint32_t val);
 		uint32_t get_reg(uint8_t reg);
@@ -142,7 +145,7 @@ class Emulator {
 		void reset(const Emulator& other);
 
 		// Perform run with provided input. May throw Fault or RunTimeout
-		void run(const std::string& input, Stats& local_stats);
+		void run(const std::string& input, cov_t& cov, Stats& local_stats);
 
 		// Run emulator until given address, return the number of instructions
 		// executed
