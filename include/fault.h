@@ -6,70 +6,61 @@
 
 // Fault: everything that will end the execution abruptly and will be considered
 // a crash
-class Fault : public std::exception {
-	public:
-		enum Type {
-			Read,
-			Write,
-			Exec,
-			Uninit,
-			OutOfBoundsRead,
-			OutOfBoundsWrite,
-			OutOfBoundsExec,
-			MisalignedRead,
-			MisalignedWrite,
-			MisalignedExec,
-		};
+struct Fault : public std::exception {
+	enum Type {
+		Read,
+		Write,
+		Exec,
+		Uninit,
+		OutOfBoundsRead,
+		OutOfBoundsWrite,
+		OutOfBoundsExec,
+		MisalignedRead,
+		MisalignedWrite,
+		MisalignedExec,
+	};
 
-	private:
-		Fault::Type type;
-		vaddr_t     fault_addr;
+	Fault::Type type;
+	vaddr_t     fault_addr;
 
-	public:
-		Fault(Fault::Type type, vaddr_t fault_addr):
-			type(type), fault_addr(fault_addr)
-			{}
+	Fault(Fault::Type type, vaddr_t fault_addr):
+		type(type), fault_addr(fault_addr) {}
+	std::string type_str() const;
 
-		friend std::ostream& operator<<(std::ostream& os, const Fault& f);
-		bool operator==(const Fault& other) const { return type == other.type && fault_addr == other.fault_addr; }
+	friend std::ostream& operator<<(std::ostream& os, const Fault& f);
+	bool operator==(const Fault& other) const { return type == other.type && fault_addr == other.fault_addr; }
 };
 
-inline std::ostream& operator<<(std::ostream& os, const Fault& f){
-	switch (f.type){
+inline std::string Fault::type_str() const {
+	switch (type){
 		case Fault::Type::Read:
-			os << "Read";
-			break;
+			return "Read";
 		case Fault::Type::Write:
-			os << "Write";
-			break;
+			return "Write";
 		case Fault::Type::Exec:
-			os << "Exec";
-			break;
+			return "Exec";
 		case Fault::Type::Uninit:
-			os << "Uninit";
-			break;
+			return "Uninit";
 		case Fault::Type::OutOfBoundsRead:
-			os << "OutOfBoundsRead";
-			break;
+			return "OutOfBoundsRead";
 		case Fault::Type::OutOfBoundsWrite:
-			os << "OutOfBoundsWrite";
-			break;
+			return "OutOfBoundsWrite";
 		case Fault::Type::OutOfBoundsExec:
-			os << "OutOfBoundsExec";
-			break;
+			return "OutOfBoundsExec";
 		case Fault::Type::MisalignedRead:
-			os << "MisalignedRead";
-			break;
+			return "MisalignedRead";
 		case Fault::Type::MisalignedWrite:
-			os << "MisalignedWrite";
-			break;
+			return "MisalignedWrite";
 		case Fault::Type::MisalignedExec:
-			os << "MisalignedExec";
-			break;
+			return "MisalignedExec";
 		default:
-			os << "UnimplementedFault";
+			return "UnimplementedFault";
 	}
-	os << " Fault, fault address = 0x" << std::hex << f.fault_addr << std::dec;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Fault& f){
+	os << f.type_str() << " Fault, fault address = 0x" << std::hex
+	   << f.fault_addr << std::dec;
 	return os;
 }
 

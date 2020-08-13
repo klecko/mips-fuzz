@@ -50,6 +50,7 @@ class Emulator {
 		uint32_t  regs[32];
 		uint32_t  hi, lo;
 		vaddr_t   pc;
+		vaddr_t   prev_pc;
 
 		// Handling of branches. If condition is true, pc must be updated to
 		// jump_addr in next cycle
@@ -90,7 +91,7 @@ class Emulator {
 
 		// Breakpoints
 		void set_bp(vaddr_t addr, breakpoint_t bp);
-		breakpoint_t get_bp(vaddr_t addr);
+		breakpoint_t get_bp(vaddr_t addr) const;
 
 		void test_bp();
 		void malloc_bp();   // __libc_malloc
@@ -130,16 +131,17 @@ class Emulator {
 		Emulator(vsize_t mem_size, const std::string& filepath,
 		         const std::vector<std::string>& argv);
 
-		vsize_t memsize();
+		vsize_t memsize() const;
 
 		void set_reg(uint8_t reg, uint32_t val);
-		uint32_t get_reg(uint8_t reg);
+		uint32_t get_reg(uint8_t reg) const;
 
 		void set_pc(vaddr_t addr);
-		uint32_t get_pc();
+		vaddr_t get_pc() const;
+		vaddr_t get_prev_pc() const;
 
 		// Forks the emulator and returns the child
-		Emulator fork();
+		Emulator fork() const;
 
 		// Resets the emulator to the parent it was previously forked from
 		void reset(const Emulator& other);

@@ -62,11 +62,11 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.dirty_bitmap, second.dirty_bitmap);
 }
 
-vsize_t Mmu::size(){
+vsize_t Mmu::size() const {
 	return memory_len;
 }
 
-vaddr_t Mmu::get_brk(){
+vaddr_t Mmu::get_brk() const {
 	return brk;
 }
 
@@ -93,7 +93,7 @@ bool Mmu::set_brk(vaddr_t new_brk){
 	return true;
 }
 
-void Mmu::check_bounds(vaddr_t addr, vsize_t len, uint8_t perm){
+void Mmu::check_bounds(vaddr_t addr, vsize_t len, uint8_t perm) const {
 	if (addr + len > memory_len)
 		switch (perm){
 			case PERM_READ:
@@ -107,7 +107,7 @@ void Mmu::check_bounds(vaddr_t addr, vsize_t len, uint8_t perm){
 		}
 }
 
-void Mmu::check_alignment(vaddr_t addr, vsize_t align, uint8_t perm){
+void Mmu::check_alignment(vaddr_t addr, vsize_t align, uint8_t perm) const {
 	if (addr % align != 0)
 		switch (perm){
 			case PERM_READ:
@@ -148,7 +148,7 @@ Asking for PERM_READ:
 	Uninit fault if it has PERM_READ but hasnt PERM_INIT (uninitialized memory)
 	Correct if it has both PERM_READ and PERM_INIT
 */
-void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm){
+void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const {
 	// Checking for reading implies checking for initialized memory
 	if (perm == PERM_READ)
 		perm |= PERM_INIT;
@@ -172,7 +172,7 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 	}
 }
 
-void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len){
+void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len) const {
 	// Check out of bounds
 	check_bounds(src, len, PERM_READ);
 	
@@ -202,7 +202,7 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	memcpy(memory+dst, src, len);
 }
 
-uint32_t Mmu::read_inst(vaddr_t addr){
+uint32_t Mmu::read_inst(vaddr_t addr) const {
 	// Check out of bounds
 	check_bounds(addr, 4, PERM_EXEC);
 
@@ -213,13 +213,10 @@ uint32_t Mmu::read_inst(vaddr_t addr){
 	check_alignment(addr, 4, PERM_EXEC);
 
 	// Read and return instruction
-	uint32_t inst;
-	memcpy(&inst, memory+addr, 4);
-	return inst;
+	return *(uint32_t*)(memory+addr);
 }
 
-
-string Mmu::read_string(vaddr_t addr){
+string Mmu::read_string(vaddr_t addr) const {
 	string result = "";
 	char c = read<char>(addr++);
 	while (c){
@@ -264,8 +261,8 @@ vaddr_t Mmu::alloc_stack(vsize_t size){
 	return memory_len;
 }
 
-Mmu Mmu::fork(){
-	// Create copy and reset dirty blocks
+Mmu Mmu::fork() const {
+	// Create copy and reset its dirty blocks
 	Mmu new_mmu(*this);
 	new_mmu.dirty_blocks.clear();
 	new_mmu.dirty_bitmap.assign(new_mmu.dirty_bitmap.size(), false);

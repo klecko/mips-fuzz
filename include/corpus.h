@@ -87,8 +87,9 @@ class Corpus {
 		// input to the corpus
 		void report_cov(int id, const cov_t& cov);
 
-		// Report a crash. If it is new, save it and write it to disk (TODO)
-		void report_crash(vaddr_t pc, const Fault& fault);
+		// Report a crash. If it is new, save it and write its associated input 
+		// to disk
+		void report_crash(int id, vaddr_t pc, const Fault& fault);
 
 };
 

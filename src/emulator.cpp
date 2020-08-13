@@ -14,9 +14,10 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
                    const vector<string>& argv): mmu(mem_size)
 {
 	memset(regs, 0, sizeof(regs));
-	hi = 0;
-	lo = 0;
-	pc = 0;
+	hi        = 0;
+	lo        = 0;
+	pc        = 0;
+	prev_pc   = 0;
 	condition = false;
 	jump_addr = 0;
 	tls       = 0;
@@ -38,7 +39,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	set_bp(0x00424e64, &Emulator::calloc_bp);
 }
 
-vsize_t Emulator::memsize(){
+vsize_t Emulator::memsize() const {
 	return mmu.size();
 }
 
@@ -48,7 +49,7 @@ void Emulator::set_reg(uint8_t reg, uint32_t val){
 		regs[reg] = val;
 }
 
-uint32_t Emulator::get_reg(uint8_t reg){
+uint32_t Emulator::get_reg(uint8_t reg) const {
 	assert(0 <= reg && reg <= 31);
 	return (reg ? regs[reg] : 0);
 }
@@ -57,11 +58,15 @@ void Emulator::set_pc(vaddr_t addr){
 	pc = addr;
 }
 
-uint32_t Emulator::get_pc(){
+vaddr_t Emulator::get_pc() const {
 	return pc;
 }
 
-Emulator Emulator::fork(){
+vaddr_t Emulator::get_prev_pc() const {
+	return prev_pc;
+}
+
+Emulator Emulator::fork() const {
 	Emulator new_emu(*this);
 	new_emu.mmu = mmu.fork();
 	return new_emu;
@@ -73,12 +78,14 @@ void Emulator::reset(const Emulator& other){
 	hi         = other.hi;
 	lo         = other.lo;
 	pc         = other.pc;
+	prev_pc    = other.prev_pc;
 	condition  = other.condition;
 	jump_addr  = other.jump_addr;
 	tls        = other.tls;
 	running    = other.running;
 	input      = other.input;
 	input_sz   = other.input_sz;
+	load_addr  = other.load_addr;
 	open_files = other.open_files;
 	elfpath    = other.elfpath;
 }
@@ -157,7 +164,7 @@ void Emulator::set_bp(vaddr_t addr, breakpoint_t bp){
 	breakpoints_bitmap[addr] = true;
 }
 
-breakpoint_t Emulator::get_bp(vaddr_t addr){
+breakpoint_t Emulator::get_bp(vaddr_t addr) const{
 	size_t i = (addr - load_addr)/4;
 	assert(i < breakpoints.size());
 	return breakpoints[i];
@@ -178,7 +185,8 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 
 	// If needed, take the branch after fetching the current instruction.
 	// Otherwise, just increment PC so it points to the next instruction
-	cycles = rdtsc();
+	cycles  = rdtsc();
+	prev_pc = pc;
 	if (condition){
 		pc = jump_addr;
 		condition = false;

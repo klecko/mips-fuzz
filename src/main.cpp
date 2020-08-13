@@ -1,5 +1,6 @@
 #include <iostream>
 #include <thread>
+#include <cstring>
 #include "common.h"
 #include "emulator.h"
 #include "corpus.h"
@@ -11,57 +12,6 @@ using namespace std;
 Adapt the elf parser to my code
 */
 
-void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
-            Stats& stats)
-{
-	Rng rng;
-	cycle_t cycles_init, cycles;
-	cov_t cov = { vector<bool>(runner.memsize(), 0) };
-	while (true){
-		Stats local_stats;
-		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid noping macro
-
-		// Run some time saving stats in local_stats
-		while (_rdtsc() - cycles_init < 50000000){
-			// Get new mutated input
-			const string& input = corpus.get_new_input(id, rng);
-
-			// Clear coverage
-			for (const vaddr_t& addr : cov.vec)
-				cov.bitmap[addr] = 0;
-			cov.vec.clear();
-
-			cycles = rdtsc(); // run_cycles
-			try {
-				runner.run(input, cov, local_stats);
-			} catch (const Fault& f) {
-				// Crash. Corpus will handle it if it is a new one
-				local_stats.crashes++;
-				corpus.report_crash(runner.get_pc(), f);
-
-			} catch (const RunTimeout&) {
-				// Timeout
-				cout << "TIMEOUT" << endl;
-				local_stats.timeouts++;
-			}
-			if (SINGLE_RUN)
-				die("end\n");
-			local_stats.run_cycles += rdtsc() - cycles;
-
-			local_stats.cases++;
-			corpus.report_cov(id, cov);
-
-			cycles = rdtsc(); // reset_cycles
-			runner.reset(parent);
-			local_stats.reset_cycles += rdtsc() - cycles;
-		}
-		//  _rdtsc() to avoid noping macro
-		local_stats.total_cycles = _rdtsc() - cycles_init;
-
-		// Update global stats
-		stats.update(local_stats);
-	}
-}
 
 void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
@@ -100,10 +50,77 @@ void print_stats(Stats& stats, const Corpus& corpus){
 	}
 }
 
+void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
+            Stats& stats)
+{
+	Rng rng;
+	cycle_t cycles_init, cycles;
+	cov_t cov = { vector<bool>(runner.memsize(), 0) };
+	while (true){
+		Stats local_stats;
+		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid noping macro
+
+		// Run some time saving stats in local_stats
+		while (_rdtsc() - cycles_init < 50000000){
+			// Get new mutated input
+			const string& input = corpus.get_new_input(id, rng);
+
+			// Clear coverage
+			for (const vaddr_t& addr : cov.vec)
+				cov.bitmap[addr] = 0;
+			cov.vec.clear();
+
+			cycles = rdtsc(); // run_cycles
+			try {
+				runner.run(input, cov, local_stats);
+			} catch (const Fault& f) {
+				// Crash. Corpus will handle it if it is a new one
+				local_stats.crashes++;
+				corpus.report_crash(id, runner.get_prev_pc(), f);
+
+			} catch (const RunTimeout&) {
+				// Timeout
+				cout << "TIMEOUT" << endl;
+				local_stats.timeouts++;
+			}
+			if (SINGLE_RUN)
+				die("end\n");
+			local_stats.run_cycles += rdtsc() - cycles;
+
+			local_stats.cases++;
+			corpus.report_cov(id, cov);
+
+			cycles = rdtsc(); // reset_cycles
+			runner.reset(parent);
+			local_stats.reset_cycles += rdtsc() - cycles;
+		}
+		//  _rdtsc() to avoid noping macro
+		local_stats.total_cycles = _rdtsc() - cycles_init;
+
+		// Update global stats
+		stats.update(local_stats);
+	}
+}
+
 int main(){
-	//srand(time(NULL));
 	const int num_threads = 8;
 	cout << "Threads: " << num_threads << endl;
+
+	// Create crash folder
+	struct stat st;
+	if (stat("./crashes", &st) == -1){
+		// Assume folder doesn't exist. Create it
+		if (mkdir("./crashes", S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) == -1){
+			cerr << "Creating crashes folder: " << strerror(errno) << endl;
+			return -1;
+		}
+	} else if (!(st.st_mode & S_IFDIR)) {
+		// It exists. Check it is a folder
+		cerr << "./crashes is not a folder" << endl;
+		return -1;
+	}
+	
+	// Create shared objects
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(
@@ -120,10 +137,9 @@ int main(){
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault runing before forking" << endl;
-		cout << "[PC: 0x" << hex << emu.get_pc() << "] " << f << endl;
+		cout << "[PC: 0x" << hex << emu.get_prev_pc() << "] " << f << endl;
 		return -1;
 	}
-
 
 	// Create worker threads
 	vector<thread> threads;

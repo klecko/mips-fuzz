@@ -3,6 +3,8 @@
 #include <sstream>
 #include <cstring> // strerror
 #include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include "corpus.h"
 #include "common.h"
 
@@ -80,7 +82,7 @@ void Corpus::report_cov(int id, const cov_t& cov){
 	lock_recorded_cov.clear();
 }
 
-void Corpus::report_crash(vaddr_t pc, const Fault& fault){
+void Corpus::report_crash(int id, vaddr_t pc, const Fault& fault){
 	auto crash = make_pair(pc, fault);
 	while (lock_uniq_crashes.test_and_set());
 
@@ -88,10 +90,17 @@ void Corpus::report_crash(vaddr_t pc, const Fault& fault){
 	auto it = uniq_crashes.begin();
 	while (it != uniq_crashes.end() && *it != crash) ++it;
 
-	// If it is a new crash, save it and write it to disk (TODO)
+	// If it is a new crash, save it and write its associaded input to disk
 	if (it == uniq_crashes.end()){
 		uniq_crashes.push_back(move(crash));
 		cout << "[PC: 0x" << hex << pc << "] " << fault << endl;
+
+		ostringstream filename;
+		filename << fault.type_str() << "_0x" << hex << pc << "_0x"
+		         << fault.fault_addr;
+		ofstream ofs("./crashes/" + filename.str());
+		ofs << mutated_inputs[id];
+		ofs.close();
 	}
 	lock_uniq_crashes.clear();
 }

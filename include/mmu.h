@@ -54,11 +54,11 @@ class Mmu {
 
 		// Checks if range is inside guest memory map, throwing OutOfBounds*
 		// fault if not
-		void check_bounds(vaddr_t addr, vsize_t len, uint8_t perm);
+		void check_bounds(vaddr_t addr, vsize_t len, uint8_t perm) const;
 
 		// Checks if `addr` is aligned to `align` bytes, throwing Misaligned*
 		// fault if not
-		void check_alignment(vaddr_t addr, vsize_t align, uint8_t perm);
+		void check_alignment(vaddr_t addr, vsize_t align, uint8_t perm) const;
 
 		// Sets region from `addr` to `addr+len` as dirty
 		void set_dirty(vaddr_t addr, vsize_t len);
@@ -70,7 +70,7 @@ class Mmu {
 		// Checks that all bytes from `addr` to `addr+len` have `perm`
 		// permission. `perm` should be PERM_READ, PERM_WRITE or PERM_EXEC.
 		// Throw an exception if permissions are not fulfilled.
-		void check_perms(vaddr_t addr, vsize_t len, uint8_t perm);
+		void check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const;
 
 	public:
 		Mmu(vsize_t mem_size = 0);
@@ -85,10 +85,10 @@ class Mmu {
 
 		Mmu& operator=(Mmu other);
 
-		vsize_t size();
+		vsize_t size() const;
 
 		// Get current brk. Attempt to set new brk, performing size checks
-		vaddr_t get_brk();
+		vaddr_t get_brk() const;
 		bool set_brk(vaddr_t new_brk);
 
 		// Allocates a block of `size` bytes. Default perms are RW
@@ -100,7 +100,7 @@ class Mmu {
 
 		// Read `len` bytes from virtual addr `src` into `dst`.
 		// Checks bounds and perms
-		void read_mem(void* dst, vaddr_t src, vsize_t len);
+		void read_mem(void* dst, vaddr_t src, vsize_t len) const;
 
 		// Write `len` bytes from `src` into virtual addr `dst`.
 		// Checks bounds and perms
@@ -108,21 +108,21 @@ class Mmu {
 
 		// Read and return and instruction from virtual addr `dst`.
 		// Checks bounds, perms and alignment
-		uint32_t read_inst(vaddr_t addr);
+		uint32_t read_inst(vaddr_t addr) const;
 
 		// Reads a value from memory. Checks bounds, perms and alignment
 		template <class T>
-		T read(vaddr_t addr);
+		T read(vaddr_t addr) const;
 
 		// Writes a value to memory. Checks bounds, perms and alignment
 		template <class T>
 		void write(vaddr_t addr, T value);
 
 		// Read a string from memory. Checks bounds, perms and alignment
-		std::string read_string(vaddr_t addr);
+		std::string read_string(vaddr_t addr) const;
 
 		// Forks the mmu and returns the child
-		Mmu fork();
+		Mmu fork() const;
 
 		// Resets the mmu to the parent it was previously forked from
 		void reset(const Mmu& other);
@@ -135,7 +135,7 @@ class Mmu {
 };
 
 template<class T>
-T Mmu::read(vaddr_t addr){
+T Mmu::read(vaddr_t addr) const {
 	T result;
 	read_mem(&result, addr, sizeof(T));
 	// Perfom this check the last as it is the least important
