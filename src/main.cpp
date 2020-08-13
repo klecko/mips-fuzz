@@ -16,7 +16,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 {
 	Rng rng;
 	cycle_t cycles_init, cycles;
-	cov_t cov  = { vector<bool>(runner.memsize(), 0) };
+	cov_t cov = { vector<bool>(runner.memsize(), 0) };
 	while (true){
 		Stats local_stats;
 		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid noping macro
@@ -113,8 +113,10 @@ int main(){
 	);
 
 	// Run until open before forking
+	// test: 0x00423e8c
+	// xxd:  0x00429e6c
 	try {
-		uint64_t insts = emu.run_until(0x423e8c);
+		uint64_t insts = emu.run_until(0x00423e8c);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault runing before forking" << endl;

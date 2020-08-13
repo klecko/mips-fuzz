@@ -177,18 +177,21 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
 	// If needed, take the branch after fetching the current instruction.
-	// In that case, add the jump address to the coverage
 	// Otherwise, just increment PC so it points to the next instruction
 	cycles = rdtsc();
 	if (condition){
 		pc = jump_addr;
 		condition = false;
-		if (!cov.bitmap[jump_addr]){
-			cov.bitmap[jump_addr] = true;
-			cov.vec.push_back(jump_addr);
-		}
 	} else 
 		pc += 4;
+
+	// If we haven't visited this instruction before, mark as visited and add it
+	// to coverage
+	if (!cov.bitmap[pc]){
+		cov.bitmap[pc] = true;
+		cov.vec.push_back(pc);
+	}
+
 	local_stats.jump_cycles += rdtsc() - cycles;
 
 	// Handle current instruction if it isn't a NOP

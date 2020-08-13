@@ -23,8 +23,10 @@ int main(int argc, char** argv){
 	read(fd, buf, sizeof(buf));
 	printf("%s\n", buf);
 
-	if (buf[0] == 'A' && buf[1] == 'B')
-		*(int*)(0x13371337) = 0x12345678;
+	// This would be impossible without coverage
+	if (buf[0] == 'A' && buf[1] == 'B' && buf[2] == 'C' && buf[3] == 'D' &&
+	    buf[4] == 'E' && buf[5] == 'F')
+			*(int*)(0x13371337) = 0x12345678;
 
 	close(fd);
 }
