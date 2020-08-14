@@ -100,7 +100,7 @@ class Mmu {
 
 		// Read `len` bytes from virtual addr `src` into `dst`.
 		// Checks bounds and perms
-		void read_mem(void* dst, vaddr_t src, vsize_t len) const;
+		void read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit=true) const;
 
 		// Write `len` bytes from `src` into virtual addr `dst`.
 		// Checks bounds and perms
@@ -112,7 +112,7 @@ class Mmu {
 
 		// Reads a value from memory. Checks bounds, perms and alignment
 		template <class T>
-		T read(vaddr_t addr) const;
+		T read(vaddr_t addr, bool chk_uninit=true) const;
 
 		// Writes a value to memory. Checks bounds, perms and alignment
 		template <class T>
@@ -135,9 +135,9 @@ class Mmu {
 };
 
 template<class T>
-T Mmu::read(vaddr_t addr) const {
+T Mmu::read(vaddr_t addr, bool chk_uninit) const {
 	T result;
-	read_mem(&result, addr, sizeof(T));
+	read_mem(&result, addr, sizeof(T), chk_uninit);
 	// Perfom this check the last as it is the least important
 	check_alignment(addr, sizeof(T), PERM_READ);
 	return result;

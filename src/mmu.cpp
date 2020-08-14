@@ -15,6 +15,7 @@ Mmu::Mmu(vsize_t mem_size){
 	next_alloc = 0;
 	stack      = 0;
 	brk        = 0;
+	min_brk    = 0;
 	max_brk    = 0;
 	dirty_bitmap.resize(memory_len/DIRTY_BLOCK_SIZE + 1, false);
 	memset(memory, 0, mem_size);
@@ -28,6 +29,7 @@ Mmu::Mmu(const Mmu& other){
 	next_alloc   = other.next_alloc;
 	stack        = other.stack;
 	brk          = other.brk;
+	min_brk      = other.min_brk;
 	max_brk      = other.max_brk;
 	dirty_blocks = vector<vaddr_t>(other.dirty_blocks);
 	dirty_bitmap = vector<bool>(other.dirty_bitmap);
@@ -57,6 +59,7 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.next_alloc, second.next_alloc);
 	swap(first.stack, second.stack);
 	swap(first.brk, second.brk);
+	swap(first.min_brk, second.min_brk);
 	swap(first.max_brk, second.max_brk);
 	swap(first.dirty_blocks, second.dirty_blocks);
 	swap(first.dirty_bitmap, second.dirty_bitmap);
@@ -149,10 +152,6 @@ Asking for PERM_READ:
 	Correct if it has both PERM_READ and PERM_INIT
 */
 void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const {
-	// Checking for reading implies checking for initialized memory
-	if (perm == PERM_READ)
-		perm |= PERM_INIT;
-
 	// Check permission for each address
 	vaddr_t addr_end = addr + len;
 	for (; addr < addr_end; addr++){
@@ -172,12 +171,17 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const {
 	}
 }
 
-void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len) const {
+void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit) const {
+	uint8_t perm = PERM_READ;
+
 	// Check out of bounds
-	check_bounds(src, len, PERM_READ);
+	check_bounds(src, len, perm);
 	
-	// Check perms
-	check_perms(src, len, PERM_READ);
+	// Check perms. Checking for reading implies checking for initialized memory
+	// by default, but it can be disabled
+	if (chk_uninit)
+		perm |= PERM_INIT;
+	check_perms(src, len, perm);
 
 	// Copy memory
 	memcpy(dst, memory+src, len);

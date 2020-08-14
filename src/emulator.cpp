@@ -7,6 +7,7 @@
 #include "common.h"
 #include "emulator.h"
 #include "elf_parser.hpp"
+#include "guest.h"
 
 using namespace std;
 
@@ -311,7 +312,7 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 
 	// Create input file
 	if (pathname == "input_file"){
-		if (flags == O_RDWR || flags == O_WRONLY)
+		if ((flags & O_RDWR) == O_RDWR || (flags & O_WRONLY) == O_WRONLY)
 			die("opening input file with write permissions");
 		
 		// God, forgive me for this casting.
@@ -320,7 +321,7 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 	} else
 		die("Unimplemented openat\n");
 
-	dbgprintf("openat(%d, %s, %d) --> %d\n", dirfd, pathname.c_str(), flags, fd);
+	dbgprintf("openat(%d, \"%s\", %d) --> %d\n", dirfd, pathname.c_str(), flags, fd);
 	error = 0;
 	return fd;
 }
@@ -328,8 +329,7 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
                               uint32_t& error)
 {
-	die("writev\n");
-	if (fd != STDOUT_FILENO)
+	if (fd != STDOUT_FILENO && fd != STDERR_FILENO)
 		die("sys_writev trying to write to fd %d\n", fd);
 
 	// Return value
@@ -392,7 +392,7 @@ uint32_t Emulator::sys_readlink(vaddr_t path_addr, vaddr_t buf_addr,
 	} else
 		die("Unimplemented readlink\n");
 	
-	dbgprintf("readlink(%s, 0x%X, %d) --> %d (%s)\n", path.c_str(), buf_addr, 
+	dbgprintf("readlink(\"%s\", 0x%X, %d) --> %d (%s)\n", path.c_str(), buf_addr, 
 	          bufsize, written, elfpath.c_str());
 	error = 0;
 	return written;
@@ -476,9 +476,51 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 uint32_t Emulator::sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
                                uint32_t& error)
 {
-	dbgprintf("fstat64(%d, 0x%X) --> -1\n", fd, statbuf_addr);
-	error = 1;
-	return -1;
+	struct guest_stat64 s;
+	// Stdin, stdout and stderr
+	switch (fd){
+		case STDIN_FILENO:
+			die("fstat stdin?\n");
+			break;
+
+		case STDOUT_FILENO:
+			guest_stat_stdout(s);
+			break;
+
+		case STDERR_FILENO:
+			die("fstat stderr?\n");
+			break;
+
+		default:
+			// Check if file is open
+			if (!open_files.count(fd))
+				die("fstat64 to not open fd %d\n", fd);
+
+			open_files[fd].stat(s);
+	}
+
+	mmu.write_mem(statbuf_addr, &s, sizeof(s));
+	dbgprintf("fstat64(%d, 0x%X) --> 0\n", fd, statbuf_addr);
+	error = 0;
+	return 0;
+}
+
+uint32_t Emulator::sys_stat64(vaddr_t pathname_addr, vaddr_t statbuf_addr,
+                              uint32_t& error)
+{
+	uint32_t ret;
+	string pathname = mmu.read_string(pathname_addr);
+	if (pathname == "input_file"){
+		struct guest_stat64 s;
+		guest_stat_default(s, input_sz);
+		mmu.write_mem(statbuf_addr, &s, sizeof(s));
+
+	} else
+		die("Unimplemented stat64: %s\n", pathname.c_str());
+
+	dbgprintf("stat64(\"%s\", 0x%X) --> 0\n", pathname.c_str(), statbuf_addr);
+	error = 0;
+	return 0;
 }
 
 uint32_t Emulator::sys_close(uint32_t fd, uint32_t& error){
@@ -487,7 +529,7 @@ uint32_t Emulator::sys_close(uint32_t fd, uint32_t& error){
 
 	// Check if file is open
 	if (!open_files.count(fd))
-		die("closing to not used fd %u\n", fd);
+		die("closing not used fd %u\n", fd);
 	
 	open_files.erase(open_files.find(fd));
 
@@ -495,6 +537,48 @@ end:
 	dbgprintf("close(%d)\n", fd);
 	error = 0;
 	return 0;
+}
+
+uint32_t Emulator::sys_llseek(uint32_t fd, uint32_t offset_hi,
+                              uint32_t offset_lo, vaddr_t result_addr,
+							  uint32_t whence, uint32_t& error)
+{
+	// Check if file is open
+	if (!open_files.count(fd))
+		die("llseek to not used fd %u\n", fd);
+	File& f = open_files[fd];
+
+	// Perform action
+	int64_t offset = (((uint64_t)offset_hi)<<32) | offset_lo;
+	int64_t result;
+	switch (whence){
+		case SEEK_SET:
+			assert(offset>0);
+			result = f.set_offset(offset);
+			break;
+
+		case SEEK_CUR:
+			f.move_cursor(offset);
+			result = f.get_offset();
+			break;
+
+		case SEEK_END:
+			result = f.set_offset(f.get_size() + offset);
+			break;
+	}
+
+	// Write result
+	mmu.write<int64_t>(result_addr, result);
+	error = 0;
+	return 0;
+}
+
+uint32_t Emulator::sys_ioctl(uint32_t fd, uint32_t request, vaddr_t argp,
+		                     uint32_t& error)
+{
+	dbgprintf("ioctl(%d, 0x%X, 0x%X)\n", fd, request, argp);
+	error = 1;
+	return -1;
 }
 
 void Emulator::handle_syscall(uint32_t syscall){
@@ -540,6 +624,15 @@ void Emulator::handle_syscall(uint32_t syscall){
 			regs[Reg::a3] = 0;
 			break;
 
+		case 4054: // ioctl
+			regs[Reg::v0] = sys_ioctl(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3]
+			);
+			break;
+
 		case 4085: // readlink
 			regs[Reg::v0] = sys_readlink(
 				regs[Reg::a0],
@@ -551,6 +644,17 @@ void Emulator::handle_syscall(uint32_t syscall){
 
 		case 4122: // uname
 			regs[Reg::v0] = sys_uname(regs[Reg::a0], regs[Reg::a3]);
+			break;
+
+		case 4140: // llseek
+			regs[Reg::v0] = sys_llseek(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3],
+				mmu.read<uint32_t>(regs[Reg::sp]+16),
+				regs[Reg::a3]
+			);
 			break;
 
 		case 4146: // writev
@@ -572,6 +676,11 @@ void Emulator::handle_syscall(uint32_t syscall){
 				mmu.read<uint32_t>(regs[Reg::sp]+20),
 				regs[Reg::a3]
 			);
+			break;
+
+		case 4213: // stat64
+			regs[Reg::v0] = 
+				sys_stat64(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
 			break;
 
 		case 4215: // fstat64
@@ -597,7 +706,7 @@ void Emulator::handle_syscall(uint32_t syscall){
 			break;
 
 		default:
-			die("Unimplemented syscall: %d\n", syscall);
+			die("Unimplemented syscall at 0x%X: %d\n", prev_pc, syscall);
 	}
 }
 

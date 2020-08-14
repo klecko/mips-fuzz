@@ -25,19 +25,6 @@ enum Reg {
 
 struct RunTimeout : std::exception {};
 
-struct guest_iovec {
-	vaddr_t iov_base;
-	vsize_t iov_len;
-};
-
-struct guest_uname {
-	char sysname[65];
-	char nodename[65];
-	char release[65];
-	char version[65];
-	char machine[65];
-	//char domainname[65];
-};
 
 class Emulator {
 	private:
@@ -120,7 +107,14 @@ class Emulator {
 		                   uint32_t& error);
 		uint32_t sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
 		                     uint32_t& error);
+		uint32_t sys_stat64(vaddr_t pathname_addr, vaddr_t statbuf_addr,
+		                     uint32_t& error);
 		uint32_t sys_close(uint32_t fd, uint32_t& error);
+		uint32_t sys_llseek(uint32_t fd, uint32_t offset_hi, uint32_t offset_lo,
+		                    vaddr_t result_addr, uint32_t whence,
+							uint32_t& error);
+		uint32_t sys_ioctl(uint32_t fd, uint32_t request, vaddr_t argp,
+		                   uint32_t& error);
 
 		void handle_syscall(uint32_t syscall);
 
@@ -221,6 +215,7 @@ class Emulator {
 		void inst_swl(uint32_t);
 		void inst_swr(uint32_t);
 		void inst_sllv(uint32_t);
+		void inst_srlv(uint32_t);
 		void inst_slt(uint32_t);
 		void inst_sub(uint32_t);
 		void inst_add(uint32_t);
@@ -237,6 +232,7 @@ class Emulator {
 		void inst_ext(uint32_t);
 		void inst_sra(uint32_t);
 		void inst_sdc1(uint32_t);
+		void inst_clz(uint32_t);
 };
 
 template<class T>

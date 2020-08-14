@@ -80,7 +80,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_sra,           // 000 011
 	&Emulator::inst_sllv,          // 000 100
 	&Emulator::inst_unimplemented, // 000 101
-	&Emulator::inst_unimplemented, // 000 110
+	&Emulator::inst_srlv,          // 000 110
 	&Emulator::inst_unimplemented, // 000 111
 	&Emulator::inst_jr,            // 001 000
 	&Emulator::inst_jalr,          // 001 001
@@ -210,7 +210,7 @@ const inst_handler_t Emulator::inst_handlers_special2[] = {
 	&Emulator::inst_unimplemented, // 011 101
 	&Emulator::inst_unimplemented, // 011 110
 	&Emulator::inst_unimplemented, // 011 111
-	&Emulator::inst_unimplemented, // 100 000
+	&Emulator::inst_clz,           // 100 000
 	&Emulator::inst_unimplemented, // 100 001
 	&Emulator::inst_unimplemented, // 100 010
 	&Emulator::inst_unimplemented, // 100 011
@@ -316,7 +316,7 @@ void Emulator::inst_test(uint32_t inst){
 }
 
 void Emulator::inst_unimplemented(uint32_t inst){
-	die("Unimplemented instruction: 0x%X\n", inst);
+	die("Unimplemented instruction at 0x%X: 0x%X\n", prev_pc, inst);
 }
 
 void Emulator::inst_R(uint32_t inst){
@@ -651,10 +651,10 @@ void Emulator::inst_swl(uint32_t val){
 
 	// Locurote. Look at the manual
 	uint32_t reg = get_reg(inst.t);
-	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
+	// Don't check uninitialized memory here
+	uint32_t w   = mmu.read<uint32_t>(addr & ~3, false);
 	memcpy(&w, (char*)(&reg)+3-offset, offset+1);
 	mmu.write<uint32_t>(addr & ~3, w);
-	die("swl\n");
 }
 
 void Emulator::inst_swr(uint32_t val){
@@ -664,16 +664,22 @@ void Emulator::inst_swr(uint32_t val){
 
 	// Locurote. Look at the manual
 	uint32_t reg = get_reg(inst.t);
-	uint32_t w   = mmu.read<uint32_t>(addr & ~3);
+	// Don't check uninitialized memory here
+	uint32_t w   = mmu.read<uint32_t>(addr & ~3, false);
 	memcpy((char*)(&w)+offset, &reg, 4-offset);
 	mmu.write<uint32_t>(addr & ~3, w);
-	die("swr\n");
 }
 
 void Emulator::inst_sllv(uint32_t val){
 	inst_R_t inst(val);
 	uint8_t shift = get_reg(inst.s) & 0b00011111;
 	set_reg(inst.d, get_reg(inst.t) << shift);
+}
+
+void Emulator::inst_srlv(uint32_t val){
+	inst_R_t inst(val);
+	uint8_t shift = get_reg(inst.s) & 0b00011111;
+	set_reg(inst.d, get_reg(inst.t) >> shift);
 }
 
 void Emulator::inst_slt(uint32_t val){
@@ -784,4 +790,14 @@ void Emulator::inst_sra(uint32_t val){
 
 void Emulator::inst_sdc1(uint32_t val){
 	// Forget about floats for now
+}
+
+void Emulator::inst_clz(uint32_t val){
+	inst_R_t inst(val);
+	uint32_t value = get_reg(inst.s);
+	uint32_t result = 0;
+	
+	// Count leading zeros
+	while ( (value & (1<<(31-result))) == 0 && result<32) result++;
+	set_reg(inst.d, result);	
 }
