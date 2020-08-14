@@ -29,11 +29,11 @@ struct guest_stat64 {
 
     uint64_t st_ino;
 
-    uint32_t      st_mode;
-    uint32_t       st_nlink;
+    uint32_t st_mode;
+    uint32_t st_nlink;
 
-    uint32_t       st_uid;
-    uint32_t       st_gid;
+    uint32_t st_uid;
+    uint32_t st_gid;
 
     uint32_t st_rdev;
     uint32_t st_pad1[3]; /* Reserved for st_rdev expansion  */
@@ -44,13 +44,13 @@ struct guest_stat64 {
      * Actually this should be timestruc_t st_atime, st_mtime and st_ctime
      * but we don't have it under Linux.
      */
-    int32_t      st_atime;
+    int32_t  st_atime;
     uint32_t st_atime_nsec;  /* Reserved for st_atime expansion  */
 
-    int32_t      st_mtime;
+    int32_t  st_mtime;
     uint32_t st_mtime_nsec;  /* Reserved for st_mtime expansion  */
 
-    int32_t      st_ctime;
+    int32_t  st_ctime;
     uint32_t st_ctime_nsec;  /* Reserved for st_ctime expansion  */
 
     uint32_t st_blksize;

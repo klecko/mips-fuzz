@@ -19,6 +19,8 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	lo        = 0;
 	pc        = 0;
 	prev_pc   = 0;
+	memset(fpregs, 0, sizeof(fpregs));
+	cc        = 0;
 	condition = false;
 	jump_addr = 0;
 	tls       = 0;
@@ -55,6 +57,26 @@ uint32_t Emulator::get_reg(uint8_t reg) const {
 	return (reg ? regs[reg] : 0);
 }
 
+void Emulator::sets_reg(uint8_t reg, float val){
+	assert(0 <= reg && reg <= 31);
+	fpregs[reg] = val;
+}
+
+void Emulator::setd_reg(uint8_t reg, double val){
+	assert(0 <= reg && reg <= 31);
+	*(double*)(fpregs+reg) = val;
+}
+
+float Emulator::gets_reg(uint8_t reg) const{
+	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
+	return fpregs[reg];
+}
+
+double Emulator::getd_reg(uint8_t reg) const{
+	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
+	return *(double*)(fpregs+reg);
+}
+
 void Emulator::set_pc(vaddr_t addr){
 	pc = addr;
 }
@@ -80,6 +102,8 @@ void Emulator::reset(const Emulator& other){
 	lo         = other.lo;
 	pc         = other.pc;
 	prev_pc    = other.prev_pc;
+	memcpy(fpregs, other.fpregs, sizeof(fpregs));
+	cc         = other.cc;
 	condition  = other.condition;
 	jump_addr  = other.jump_addr;
 	tls        = other.tls;

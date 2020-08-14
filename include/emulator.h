@@ -39,6 +39,10 @@ class Emulator {
 		vaddr_t   pc;
 		vaddr_t   prev_pc;
 
+		// FPU
+		float     fpregs[32];
+		uint8_t   cc;
+
 		// Handling of branches. If condition is true, pc must be updated to
 		// jump_addr in next cycle
 		bool      condition;
@@ -130,6 +134,11 @@ class Emulator {
 		void set_reg(uint8_t reg, uint32_t val);
 		uint32_t get_reg(uint8_t reg) const;
 
+		void sets_reg(uint8_t reg, float val);
+		void setd_reg(uint8_t reg, double val);
+		float gets_reg(uint8_t reg) const;
+		double getd_reg(uint8_t reg) const;
+
 		void set_pc(vaddr_t addr);
 		vaddr_t get_pc() const;
 		vaddr_t get_prev_pc() const;
@@ -155,11 +164,13 @@ class Emulator {
 		static const inst_handler_t inst_handlers_RI[];
 		static const inst_handler_t inst_handlers_special2[];
 		static const inst_handler_t inst_handlers_special3[];
+		static const inst_handler_t inst_handlers_COP1[];
 
 		void inst_R(uint32_t);
 		void inst_RI(uint32_t);
 		void inst_special2(uint32_t);
 		void inst_special3(uint32_t);
+		void inst_COP1(uint32_t);
 
 		void inst_test(uint32_t);
 		void inst_unimplemented(uint32_t);
@@ -231,8 +242,18 @@ class Emulator {
 		void inst_mtlo(uint32_t);
 		void inst_ext(uint32_t);
 		void inst_sra(uint32_t);
-		void inst_sdc1(uint32_t);
 		void inst_clz(uint32_t);
+		void inst_lwc1(uint32_t);
+		void inst_swc1(uint32_t);
+		void inst_ldc1(uint32_t);
+		void inst_sdc1(uint32_t);
+		void inst_fmt_s(uint32_t);
+		void inst_fmt_d(uint32_t);
+		void inst_fmt_w(uint32_t);
+		void inst_fmt_l(uint32_t);
+		void inst_fmt_ps(uint32_t);
+		void inst_mfc1(uint32_t);
+		void inst_mfhc1(uint32_t);
 };
 
 template<class T>
@@ -282,6 +303,21 @@ struct inst_J_t {
 
 	inst_J_t(uint32_t inst){ // 26 bits
 		A = inst & 0x3FFFFFF;
+	}
+};
+
+// Used for FPU
+struct inst_F_t {
+	uint8_t t;
+	uint8_t s;
+	uint8_t d;
+	uint8_t funct;
+
+	inst_F_t(uint32_t inst){
+		t     = (inst >> 16) & 0b00011111;
+		s     = (inst >> 11) & 0b00011111;
+		d     = (inst >> 6)  & 0b00011111;
+		funct = inst & 0b00111111;
 	}
 };
 

@@ -23,7 +23,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_xori,          // 001 110
 	&Emulator::inst_lui,           // 001 111
 	&Emulator::inst_unimplemented, // 010 000
-	&Emulator::inst_unimplemented, // 010 001
+	&Emulator::inst_COP1,          // 010 001
 	&Emulator::inst_unimplemented, // 010 010
 	&Emulator::inst_unimplemented, // 010 011
 	&Emulator::inst_unimplemented, // 010 100
@@ -55,15 +55,15 @@ const inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_swr,           // 101 110
 	&Emulator::inst_unimplemented, // 101 111
 	&Emulator::inst_ll,            // 110 000
-	&Emulator::inst_unimplemented, // 110 001
+	&Emulator::inst_lwc1,          // 110 001
 	&Emulator::inst_unimplemented, // 110 010
 	&Emulator::inst_pref,          // 110 011
 	&Emulator::inst_unimplemented, // 110 100
-	&Emulator::inst_unimplemented, // 110 101
+	&Emulator::inst_ldc1,          // 110 101
 	&Emulator::inst_unimplemented, // 110 110
 	&Emulator::inst_unimplemented, // 110 111
 	&Emulator::inst_sc,            // 111 000
-	&Emulator::inst_unimplemented, // 111 001
+	&Emulator::inst_swc1,          // 111 001
 	&Emulator::inst_unimplemented, // 111 010
 	&Emulator::inst_unimplemented, // 111 011
 	&Emulator::inst_unimplemented, // 111 100
@@ -311,6 +311,42 @@ const inst_handler_t Emulator::inst_handlers_special3[] = {
 	&Emulator::inst_unimplemented, // 111 111
 };
 
+// Type COP1 instructions indexed by rs/fmt field
+const inst_handler_t Emulator::inst_handlers_COP1[] = {
+	&Emulator::inst_mfc1,          // 00 000
+	&Emulator::inst_unimplemented, // 00 001
+	&Emulator::inst_unimplemented, // 00 010
+	&Emulator::inst_mfhc1,         // 00 011
+	&Emulator::inst_unimplemented, // 00 100
+	&Emulator::inst_unimplemented, // 00 101
+	&Emulator::inst_unimplemented, // 00 110
+	&Emulator::inst_unimplemented, // 00 111
+	&Emulator::inst_unimplemented, // 01 000
+	&Emulator::inst_unimplemented, // 01 001
+	&Emulator::inst_unimplemented, // 01 010
+	&Emulator::inst_unimplemented, // 01 011
+	&Emulator::inst_unimplemented, // 01 100
+	&Emulator::inst_unimplemented, // 01 101
+	&Emulator::inst_unimplemented, // 01 110
+	&Emulator::inst_unimplemented, // 01 111
+	&Emulator::inst_fmt_s,         // 10 000
+	&Emulator::inst_fmt_d,         // 10 001
+	&Emulator::inst_unimplemented, // 10 010
+	&Emulator::inst_unimplemented, // 10 011
+	&Emulator::inst_fmt_w,         // 10 100
+	&Emulator::inst_fmt_l,         // 10 101
+	&Emulator::inst_fmt_ps,        // 10 110
+	&Emulator::inst_unimplemented, // 10 111
+	&Emulator::inst_unimplemented, // 11 000
+	&Emulator::inst_unimplemented, // 11 001
+	&Emulator::inst_unimplemented, // 11 010
+	&Emulator::inst_unimplemented, // 11 011
+	&Emulator::inst_unimplemented, // 11 100
+	&Emulator::inst_unimplemented, // 11 101
+	&Emulator::inst_unimplemented, // 11 110
+	&Emulator::inst_unimplemented, // 11 111
+};
+
 void Emulator::inst_test(uint32_t inst){
 	cout << "Test instruction" << endl;
 }
@@ -335,6 +371,10 @@ void Emulator::inst_special2(uint32_t inst){
 
 void Emulator::inst_special3(uint32_t inst){
 	(this->*inst_handlers_special3[inst & 0b00111111])(inst);
+}
+
+void Emulator::inst_COP1(uint32_t inst){
+	(this->*inst_handlers_COP1[(inst >> 21) & 0b00011111])(inst);
 }
 
 void Emulator::inst_or(uint32_t val){
@@ -788,10 +828,6 @@ void Emulator::inst_sra(uint32_t val){
 	set_reg(inst.d, (int32_t)get_reg(inst.t) >> inst.S);
 }
 
-void Emulator::inst_sdc1(uint32_t val){
-	// Forget about floats for now
-}
-
 void Emulator::inst_clz(uint32_t val){
 	inst_R_t inst(val);
 	uint32_t value = get_reg(inst.s);
@@ -800,4 +836,87 @@ void Emulator::inst_clz(uint32_t val){
 	// Count leading zeros
 	while ( (value & (1<<(31-result))) == 0 && result<32) result++;
 	set_reg(inst.d, result);	
+}
+
+void Emulator::inst_lwc1(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	sets_reg(inst.t, mmu.read<float>(addr));
+}
+
+void Emulator::inst_swc1(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	mmu.write<float>(addr, gets_reg(inst.t));
+}
+
+void Emulator::inst_ldc1(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	setd_reg(inst.t, mmu.read<double>(addr));
+}
+
+void Emulator::inst_sdc1(uint32_t val){
+	inst_I_t inst(val);
+	vaddr_t addr = get_reg(inst.s) + (int16_t)inst.C;
+	mmu.write<double>(addr, getd_reg(inst.t));
+}
+
+void Emulator::inst_fmt_s(uint32_t val){
+	inst_F_t inst(val);
+	if (inst.funct & 0b110000 == 0b110000){
+		// C.cond.s
+		uint8_t cond = inst.funct & 0b001111;
+	} else switch (inst.funct){
+		case 0b000010: // mul.s
+			sets_reg(inst.d, gets_reg(inst.s) * gets_reg(inst.t));
+			break;
+		case 0b000011: // div.s
+			sets_reg(inst.d, gets_reg(inst.s) / gets_reg(inst.t));
+			break;
+		case 0b100001: // cvt.d.s
+			setd_reg(inst.d, (double)gets_reg(inst.s));
+			break;
+		default:
+			die("Unimplemented fmt s at 0x%X\n", prev_pc);
+	}
+}
+
+void Emulator::inst_fmt_d(uint32_t val){
+	inst_F_t inst(val);
+	if (inst.funct & 0b110000 == 0b110000){
+		// C.cond.d
+		uint8_t cond = inst.funct & 0b001111;
+	} else switch (inst.funct){
+		case 0b000010: // mul.d
+			setd_reg(inst.d, getd_reg(inst.s) * getd_reg(inst.t));
+			break;
+		case 0b000011: // div.d
+			setd_reg(inst.d, getd_reg(inst.s) / getd_reg(inst.t));
+			break;
+		default:
+			die("Unimplemented fmt s at 0x%X\n", prev_pc);
+	}
+}
+
+void Emulator::inst_fmt_w(uint32_t val){
+	die("Unimplemented fmt w at 0x%X\n", prev_pc);
+}
+
+void Emulator::inst_fmt_l(uint32_t val){
+	die("Unimplemented fmt l at 0x%X\n", prev_pc);
+}
+
+void Emulator::inst_fmt_ps(uint32_t val){
+	die("Unimplemented fmt ps at 0x%X\n", prev_pc);
+}
+
+void Emulator::inst_mfc1(uint32_t val){
+	inst_F_t inst(val);
+	set_reg(inst.t, gets_reg(inst.s));
+}
+
+void Emulator::inst_mfhc1(uint32_t val){
+	inst_F_t inst(val);
+	set_reg(inst.t, gets_reg(inst.s+1));
 }
