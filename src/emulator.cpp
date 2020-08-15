@@ -33,13 +33,13 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	// Breakpoints can only be set in text, which is between load address and 
 	// initial brk (always?). Divide by 4 because each instruction is 4 bytes
 	breakpoints.resize((mmu.get_brk()-load_addr)/4);
-	set_bp(0x00423f00, &Emulator::malloc_bp);
-	set_bp(0x00424634, &Emulator::free_bp);
-	set_bp(0x004248d8, &Emulator::realloc_bp);
-	set_bp(0x00424d20, &Emulator::memalign_bp);
-	set_bp(0x00424d3c, &Emulator::valloc_bp);
-	set_bp(0x00424db8, &Emulator::pvalloc_bp);
-	set_bp(0x00424e64, &Emulator::calloc_bp);
+/* 	set_bp(0x004b58a0, &Emulator::malloc_bp);   // __libc_malloc
+	set_bp(0x004b5fd4, &Emulator::free_bp);     // __free
+	set_bp(0x004b6278, &Emulator::realloc_bp);  // __libc_realloc
+	set_bp(0x004b66c0, &Emulator::memalign_bp); // __libc_memalign
+	set_bp(0x004b66dc, &Emulator::valloc_bp);   // __libc_valloc
+	set_bp(0x004b6758, &Emulator::pvalloc_bp);  // pvalloc
+	set_bp(0x004b6804, &Emulator::calloc_bp);   // __calloc */
 }
 
 vsize_t Emulator::memsize() const {
@@ -275,6 +275,7 @@ uint64_t Emulator::run_until(vaddr_t pc){
 	while (this->pc != pc){
 		run_inst(dummy2, dummy);
 		dummy.instr++;
+		//cout << *this << endl;
 	}
 	return dummy.instr;
 }
@@ -284,17 +285,19 @@ void Emulator::test_bp(){
 }
 
 void Emulator::malloc_bp(){
-	vsize_t size = regs[Reg::a0];
-	vaddr_t addr = (size > 0 ? mmu.alloc(size) : 0);
+	vsize_t size  = regs[Reg::a0];
+	vaddr_t addr  = (size > 0 ? mmu.alloc(size) : 0);
 	regs[Reg::v0] = addr;
-	pc = regs[Reg::ra];
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
 	dbgprintf("malloc(%u) --> 0x%X\n", size, addr);
 }
 
 void Emulator::free_bp(){
 	//die("free_bp\n");
 	vsize_t addr = regs[Reg::a0];
-	pc = regs[Reg::ra];
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
 	dbgprintf("free(0x%X)\n", addr);
 }
 
@@ -315,7 +318,22 @@ void Emulator::pvalloc_bp(){
 }
 
 void Emulator::calloc_bp(){
-	die("calloc_bp\n");
+	// Compute size and check for overflow
+	vsize_t nmemb    = regs[Reg::a0];
+	vsize_t size     = regs[Reg::a1];
+	vsize_t alloc_sz = nmemb * size;
+	if (nmemb != 0 && alloc_sz/nmemb != size)
+		die("calloc integer overflow\n");
+
+	// Perform allocation and set memory to zero
+	vaddr_t addr = (alloc_sz > 0 ? mmu.alloc(alloc_sz) : 0);
+	char zero[alloc_sz] = {0};
+	mmu.write_mem(addr, zero, sizeof(zero));
+
+	regs[Reg::v0] = addr;
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
+	dbgprintf("calloc(%u, %u) --> 0x%X\n", nmemb, size, addr);
 }
 
 uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){
@@ -382,7 +400,7 @@ uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
 		char buf[iov_len + 1];
 		mmu.read_mem(buf, iov_base, iov_len);
 		buf[iov_len] = 0;
-		guestprintf("output: %s\n", buf);
+		guestprintf("%s", buf);
 		bytes_written += iov_len;
 	}
 
@@ -483,10 +501,12 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 			char buf[count + 1];
 			mmu.read_mem(buf, buf_addr, count);
 			buf[count] = 0;
-			guestprintf("[OUTPUT] %s\n", buf);
+			guestprintf("%s", buf);
 			error = 0;
 			return count;
 	}
+
+	die("write(%d, 0x%X, %d)\n", fd, buf_addr, count);
 
 	// Check if file is open
 	if (!open_files.count(fd))
@@ -587,22 +607,22 @@ uint32_t Emulator::sys_llseek(uint32_t fd, uint32_t offset_hi,
 	int64_t result;
 	switch (whence){
 		case SEEK_SET:
-			assert(offset>0);
-			result = f.set_offset(offset);
+			f.set_offset(offset);
 			break;
 
 		case SEEK_CUR:
-			f.move_cursor(offset);
-			result = f.get_offset();
+			f.set_offset(f.get_offset() + offset);
 			break;
 
 		case SEEK_END:
-			result = f.set_offset(f.get_size() + offset);
+			f.set_offset(f.get_size() + offset);
 			break;
 	}
 
 	// Write result
-	mmu.write<int64_t>(result_addr, result);
+	dbgprintf("llseek(%d, 0x%X, 0x%X, 0x%X, %d) --> %lX\n", fd, offset_hi,
+	          offset_lo, result_addr, whence, f.get_offset());
+	mmu.write<int64_t>(result_addr, f.get_offset());
 	error = 0;
 	return 0;
 }

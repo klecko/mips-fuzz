@@ -20,6 +20,11 @@ int64_t File::move_cursor(int64_t increment){
 	if (increment < 0)
 		die("negative move cursor\n");
 
+	if (offset >= size){
+		// Offset is currently past end.
+		return 0;
+	}
+
 	// Reduce increment if there is not enough space available
 	int64_t ret = (offset+increment < size ? increment : size-offset);
 
@@ -32,13 +37,10 @@ size_t File::get_offset(){
 	return offset;
 }
 
-size_t File::set_offset(size_t new_offset){
-	// This is legal, but disallow for now
-	if (offset > size)
-		die("seting offset past end\n");
-
+void File::set_offset(size_t new_offset){
+	if (offset < 0)
+		die("attempt to set file negative offset\n");
 	offset = new_offset;
-	return offset;
 }
 
 size_t File::get_size(){

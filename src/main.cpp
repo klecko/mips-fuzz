@@ -103,7 +103,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 }
 
 int main(){
-	const int num_threads = 1;
+	const int num_threads = 8;
 	cout << "Threads: " << num_threads << endl;
 
 	// Create crash folder
@@ -119,27 +119,28 @@ int main(){
 		cerr << "./crashes is not a folder" << endl;
 		return -1;
 	}
-	
+
 	// Create shared objects
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(
-		8 * 1024 * 1024,                                 // memory
-		"../test_bins/binutils-build/binutils/readelf",  // path to elf
-		{"readelf", "-h", "input_file"}                  // argv
+		8 * 1024 * 1024,                // memory
+		"../test_bins/readelf",         // path to elf
+		{"readelf", "-l", "input_file"} // argv
 	);
 
 	// Run until open before forking
 	// test: 0x00423e8c
 	// xxd:  0x00429e6c
-/* 	try {
-		uint64_t insts = emu.run_until(0x00429e6c);
+	try {
+		uint64_t insts = emu.run_until(0x004c081c);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault runing before forking" << endl;
 		cout << "[PC: 0x" << hex << emu.get_prev_pc() << "] " << f << endl;
+		cout << emu << endl;
 		return -1;
-	} */
+	}
 
 	// Create worker threads
 	vector<thread> threads;

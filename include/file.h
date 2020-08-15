@@ -23,7 +23,7 @@ class File {
 		// File size
 		size_t   size;
 
-		// Offset of the cursor
+		// Cursor offset
 		size_t   offset;
 
 	public:
@@ -35,11 +35,9 @@ class File {
 		// Attempt to move the cursor. Returns the real increment performed
 		int64_t move_cursor(int64_t increment);
 
-		// Get offset
+		// Get and set offset. It can be set past `size`
 		size_t  get_offset();
-
-		// Attempt to set offset. Returns the resulting offset
-		size_t  set_offset(size_t new_offset);
+		void    set_offset(size_t new_offset);
 
 		// Get size
 		size_t  get_size();

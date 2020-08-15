@@ -219,6 +219,7 @@ class Emulator {
 		void inst_bshfl(uint32_t);
 		void inst_seh(uint32_t);
 		void inst_seb(uint32_t);
+		void inst_wsbh(uint32_t);
 		void inst_srl(uint32_t);
 		void inst_lh(uint32_t);
 		void inst_lbu(uint32_t);

@@ -552,7 +552,7 @@ void Emulator::inst_rdhwr(uint32_t val){
 			break;
 
 		default:
-			die("Unimplemented rdhwr: %d\n", inst.d);
+			die("Unimplemented rdhwr at 0x%X: %d\n", prev_pc, inst.d);
 	}
 	
 	set_reg(inst.t, hwr);
@@ -606,6 +606,10 @@ void Emulator::inst_nor(uint32_t val){
 
 void Emulator::inst_bshfl(uint32_t val){
 	switch ((val >> 6) & 0b11111){
+		case 0b00010: // wsbh
+			inst_wsbh(val);
+			break;
+
 		case 0b10000: // seb
 			inst_seb(val);
 			break;
@@ -615,7 +619,7 @@ void Emulator::inst_bshfl(uint32_t val){
 			break;
 
 		default:
-			die("Unimplemented bshfl instruction: 0x%X\n", val);
+			die("Unimplemented bshfl instruction at 0x%X: 0x%X\n",prev_pc, val);
 	}
 }
 
@@ -627,8 +631,16 @@ void Emulator::inst_seh(uint32_t val){
 
 void Emulator::inst_seb(uint32_t val){
 	inst_R_t inst(val);
-	uint16_t value = get_reg(inst.t);
+	uint8_t value = get_reg(inst.t);
 	set_reg(inst.d, (int32_t)(int8_t)value);
+}
+
+void Emulator::inst_wsbh(uint32_t val){
+	inst_R_t inst(val);
+	uint32_t value = get_reg(inst.t);
+	value = ((value >> 16) & 0xFF) || ((value >> 24) & 0xFF) ||
+	        ((value >> 0)  & 0xFF) || ((value >> 8)  & 0xFF);
+	set_reg(inst.d, value);
 }
 
 void Emulator::inst_srl(uint32_t val){
@@ -958,7 +970,6 @@ void Emulator::inst_c_cond_d(uint32_t val){
 		default:
 			die("Unimplemented c.cond.d at 0x%X: %X\n", prev_pc, val);
 	}
-	printf("comparing %f and %f, seting cc %d to %d at 0x%X\n", val1, val2, cc, get_cc(cc), prev_pc);
 }
 
 void Emulator::inst_bc1(uint32_t val){
@@ -967,9 +978,6 @@ void Emulator::inst_bc1(uint32_t val){
 	uint8_t cc = (inst.t >> 2) & 0b111;
 	condition  = (jump_if_true ? get_cc(cc) : !get_cc(cc));
 	jump_addr  = pc + ((int16_t)inst.C << 2);
-	printf("check on cc %d\n", cc);
-	if (condition)
-		printf("branch taken from 0x%X to 0x%X\n", prev_pc, jump_addr);
 }
 
 void Emulator::inst_cfc1(uint32_t val){
