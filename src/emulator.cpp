@@ -20,7 +20,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	pc        = 0;
 	prev_pc   = 0;
 	memset(fpregs, 0, sizeof(fpregs));
-	cc        = 0;
+	ccs.reset();
 	condition = false;
 	jump_addr = 0;
 	tls       = 0;
@@ -63,18 +63,28 @@ void Emulator::sets_reg(uint8_t reg, float val){
 }
 
 void Emulator::setd_reg(uint8_t reg, double val){
-	assert(0 <= reg && reg <= 31);
+	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
 	*(double*)(fpregs+reg) = val;
 }
 
 float Emulator::gets_reg(uint8_t reg) const{
-	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
+	assert(0 <= reg && reg <= 31);
 	return fpregs[reg];
 }
 
 double Emulator::getd_reg(uint8_t reg) const{
 	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
 	return *(double*)(fpregs+reg);
+}
+
+void Emulator::set_cc(uint8_t cc, bool val){
+	assert(0 <= cc && cc <= 7);
+	ccs[cc] = val;
+}
+
+bool Emulator::get_cc(uint8_t cc) const {
+	// This performs range checks
+	return ccs.test(cc);
 }
 
 void Emulator::set_pc(vaddr_t addr){
@@ -103,7 +113,7 @@ void Emulator::reset(const Emulator& other){
 	pc         = other.pc;
 	prev_pc    = other.prev_pc;
 	memcpy(fpregs, other.fpregs, sizeof(fpregs));
-	cc         = other.cc;
+	ccs        = other.ccs;
 	condition  = other.condition;
 	jump_addr  = other.jump_addr;
 	tls        = other.tls;
@@ -745,17 +755,26 @@ const char* regs_map[] = {
 	"gp", "sp", "fp", "ra"
 };
 ostream& operator<<(ostream& os, const Emulator& emu){
-	os << hex << setfill('0');
+	os << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
 	os << "PC:  " << setw(8) << emu.pc << endl;
 	for (int i = 0; i < 32; i++){
 		os << "$" << regs_map[i] << ": " << setw(8) << emu.regs[i] << "\t";
 		if ((i+1)%8 == 0)
 			os << endl;
 	}
+
+	for (int i = 0; i < 32; i+=2){
+		os << "$f" << setw(2) << i << ": " << setw(8) << emu.getd_reg(i) << "\t";
+		if ((i+2) % 16 == 0)
+			os << endl;
+	}
+
 	os << "condition: " << emu.condition << "\t"
 	   << "jump addr: " << emu.jump_addr << endl;
+
 	for (const auto& f : emu.open_files)
 		cout << "file fd " << f.first << ": " << f.second << endl;
 	os << dec;
+
 	return os;
 }

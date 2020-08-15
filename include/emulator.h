@@ -39,9 +39,9 @@ class Emulator {
 		vaddr_t   pc;
 		vaddr_t   prev_pc;
 
-		// FPU
+		// FPU registers and condition codes
 		float     fpregs[32];
-		uint8_t   cc;
+		std::bitset<8> ccs;
 
 		// Handling of branches. If condition is true, pc must be updated to
 		// jump_addr in next cycle
@@ -138,6 +138,9 @@ class Emulator {
 		void setd_reg(uint8_t reg, double val);
 		float gets_reg(uint8_t reg) const;
 		double getd_reg(uint8_t reg) const;
+
+		void set_cc(uint8_t cc, bool val);
+		bool get_cc(uint8_t cc) const ;
 
 		void set_pc(vaddr_t addr);
 		vaddr_t get_pc() const;
@@ -254,6 +257,12 @@ class Emulator {
 		void inst_fmt_ps(uint32_t);
 		void inst_mfc1(uint32_t);
 		void inst_mfhc1(uint32_t);
+		void inst_mtc1(uint32_t);
+		void inst_mthc1(uint32_t);
+		void inst_c_cond_s(uint32_t);
+		void inst_c_cond_d(uint32_t);
+		void inst_bc1(uint32_t);
+		void inst_cfc1(uint32_t);
 };
 
 template<class T>

@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cstring> // memcpy
+#include <cmath>   // isnan
 #include "emulator.h"
 
 using namespace std;
@@ -315,13 +316,13 @@ const inst_handler_t Emulator::inst_handlers_special3[] = {
 const inst_handler_t Emulator::inst_handlers_COP1[] = {
 	&Emulator::inst_mfc1,          // 00 000
 	&Emulator::inst_unimplemented, // 00 001
-	&Emulator::inst_unimplemented, // 00 010
+	&Emulator::inst_cfc1,          // 00 010
 	&Emulator::inst_mfhc1,         // 00 011
-	&Emulator::inst_unimplemented, // 00 100
+	&Emulator::inst_mtc1,          // 00 100
 	&Emulator::inst_unimplemented, // 00 101
 	&Emulator::inst_unimplemented, // 00 110
-	&Emulator::inst_unimplemented, // 00 111
-	&Emulator::inst_unimplemented, // 01 000
+	&Emulator::inst_mthc1,         // 00 111
+	&Emulator::inst_bc1,           // 01 000
 	&Emulator::inst_unimplemented, // 01 001
 	&Emulator::inst_unimplemented, // 01 010
 	&Emulator::inst_unimplemented, // 01 011
@@ -864,9 +865,9 @@ void Emulator::inst_sdc1(uint32_t val){
 
 void Emulator::inst_fmt_s(uint32_t val){
 	inst_F_t inst(val);
-	if (inst.funct & 0b110000 == 0b110000){
+	if ((inst.funct & 0b110000) == 0b110000){
 		// C.cond.s
-		uint8_t cond = inst.funct & 0b001111;
+		inst_c_cond_s(val);
 	} else switch (inst.funct){
 		case 0b000010: // mul.s
 			sets_reg(inst.d, gets_reg(inst.s) * gets_reg(inst.t));
@@ -884,9 +885,9 @@ void Emulator::inst_fmt_s(uint32_t val){
 
 void Emulator::inst_fmt_d(uint32_t val){
 	inst_F_t inst(val);
-	if (inst.funct & 0b110000 == 0b110000){
+	if ((inst.funct & 0b110000) == 0b110000){
 		// C.cond.d
-		uint8_t cond = inst.funct & 0b001111;
+		inst_c_cond_d(val);
 	} else switch (inst.funct){
 		case 0b000010: // mul.d
 			setd_reg(inst.d, getd_reg(inst.s) * getd_reg(inst.t));
@@ -918,5 +919,73 @@ void Emulator::inst_mfc1(uint32_t val){
 
 void Emulator::inst_mfhc1(uint32_t val){
 	inst_F_t inst(val);
-	set_reg(inst.t, gets_reg(inst.s+1));
+	double value = getd_reg(inst.s);
+	// Get upper 32 bits
+	set_reg(inst.t, *(uint32_t*)((float*)&value+1));
+}
+
+void Emulator::inst_mtc1(uint32_t val){
+	inst_F_t inst(val);
+	sets_reg(inst.s, get_reg(inst.t));
+}
+
+void Emulator::inst_mthc1(uint32_t val){
+	inst_F_t inst(val);
+	sets_reg(inst.s+1, get_reg(inst.t));
+}
+
+void Emulator::inst_c_cond_s(uint32_t val){
+	inst_F_t inst(val);
+	uint8_t cond = inst.funct & 0b001111;
+	die("Unimplemented c.cond.s at 0x%X\n", prev_pc);
+}
+
+void Emulator::inst_c_cond_d(uint32_t val){
+	inst_F_t inst(val);
+	uint8_t cond = inst.funct & 0b001111;
+	uint8_t cc   = (inst.d >> 2) & 0b111;
+	double  val1 = getd_reg(inst.s);
+	double  val2 = getd_reg(inst.t);
+	switch (cond){
+		case 0b0001: // un
+			set_cc(cc, isnan(val1) || isnan(val1));
+			break;
+		case 0b0111: // ule
+			/* set_cc(cc, isnan(val1) || isnan(val1) || (val1<val2) ||
+			           (val1==val2)); */
+			set_cc(cc, !(val1>val2));
+			break;
+		default:
+			die("Unimplemented c.cond.d at 0x%X: %X\n", prev_pc, val);
+	}
+	printf("comparing %f and %f, seting cc %d to %d at 0x%X\n", val1, val2, cc, get_cc(cc), prev_pc);
+}
+
+void Emulator::inst_bc1(uint32_t val){
+	inst_I_t inst(val);
+	bool jump_if_true = inst.t & 1;
+	uint8_t cc = (inst.t >> 2) & 0b111;
+	condition  = (jump_if_true ? get_cc(cc) : !get_cc(cc));
+	jump_addr  = pc + ((int16_t)inst.C << 2);
+	printf("check on cc %d\n", cc);
+	if (condition)
+		printf("branch taken from 0x%X to 0x%X\n", prev_pc, jump_addr);
+}
+
+void Emulator::inst_cfc1(uint32_t val){
+	inst_F_t inst(val);
+	uint32_t value;
+	switch (inst.s){
+		case 31: // FCSR. Qemu uses all fields 0 except CCs
+			value = 0;
+			// Set CCs
+			value |= (ccs.test(0) << 23);
+			for (int i = 1; i < 8; i++)
+				value |= (ccs.test(i) << 24+i);
+			break;
+
+		default:
+			die("Unimplemented cfc1 at 0x%X\n", prev_pc);
+	}
+	set_reg(inst.t, value);
 }
