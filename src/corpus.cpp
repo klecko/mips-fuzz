@@ -10,23 +10,34 @@
 
 using namespace std;
 
-Corpus::Corpus(int nthreads, const string& pathname){
+Corpus::Corpus(int nthreads, const string& path){
 	// One element for each thread
 	mutated_inputs.resize(nthreads);
 
 	// Try to open the directory
-	DIR* dir = opendir(pathname.c_str());
+	DIR* dir = opendir(path.c_str());
 	if (!dir)
-		die("Error opening directory %s: %s\n", pathname.c_str(), 
+		die("Error opening directory %s: %s\n", path.c_str(),
 		     strerror(errno));
-	
+
 	// Iterate the directory
 	struct dirent* ent;
+	struct stat st;
+	string filepath;
 	while (ent = readdir(dir)){
-		if (ent->d_type != DT_REG) 
+		filepath = path + "/" + ent->d_name;
+
+		// Check file type. If readdir fails to provide it, fallback
+		// to stat
+		if (ent->d_type == DT_UNKNOWN){
+			stat(filepath.c_str(), &st);
+			if (!S_ISREG(st.st_mode))
+				continue;
+		} else if (ent->d_type != DT_REG)
 			continue;
+
 		// For each regular file, introduce its content into `corpus`
-		ifstream ifs(pathname + "/" + ent->d_name);
+		ifstream ifs(filepath);
 		ostringstream ss;
 		ss << ifs.rdbuf();
 		corpus.push_back(ss.str());
@@ -37,7 +48,9 @@ Corpus::Corpus(int nthreads, const string& pathname){
 	lock_corpus.clear();
 	lock_recorded_cov.clear();
 	lock_uniq_crashes.clear();
-	
+
+	if (corpus.size() == 0)
+		die("Empty corpus\n");
 	cout << "Total files read: " << corpus.size() << endl;
 }
 

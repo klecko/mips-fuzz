@@ -73,7 +73,7 @@ class Corpus {
 		void add_input(const std::string& new_input);
 
 	public:
-		Corpus(int nthreads, const std::string& pathname);
+		Corpus(int nthreads, const std::string& path);
 
 		size_t size() const;
 		size_t cov_size() const;
