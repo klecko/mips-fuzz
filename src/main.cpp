@@ -103,7 +103,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 }
 
 int main(){
-	const int num_threads = 8;
+	const int num_threads = (DEBUG ? 1 : thread::hardware_concurrency());
 	cout << "Threads: " << num_threads << endl;
 
 	// Create crash folder
@@ -147,7 +147,7 @@ int main(){
 	for (int i = 0; i < num_threads; i++)
 		threads.push_back(thread(worker, i, emu.fork(), ref(emu), ref(corpus),
 		                         ref(stats)));
-	
+
 	// Create stats thread
 	threads.push_back(thread(print_stats, ref(stats), ref(corpus)));
 
