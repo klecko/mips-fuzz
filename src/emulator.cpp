@@ -27,19 +27,8 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	running   = false;
 	input     = NULL;
 	input_sz  = 0;
-	load_elf(filepath, argv);
 	breakpoints_bitmap.resize(mem_size);
-
-	// Breakpoints can only be set in text, which is between load address and 
-	// initial brk (always?). Divide by 4 because each instruction is 4 bytes
-	breakpoints.resize((mmu.get_brk()-load_addr)/4);
-/* 	set_bp(0x004b58a0, &Emulator::malloc_bp);   // __libc_malloc
-	set_bp(0x004b5fd4, &Emulator::free_bp);     // __free
-	set_bp(0x004b6278, &Emulator::realloc_bp);  // __libc_realloc
-	set_bp(0x004b66c0, &Emulator::memalign_bp); // __libc_memalign
-	set_bp(0x004b66dc, &Emulator::valloc_bp);   // __libc_valloc
-	set_bp(0x004b6758, &Emulator::pvalloc_bp);  // pvalloc
-	set_bp(0x004b6804, &Emulator::calloc_bp);   // __calloc */
+	load_elf(filepath, argv);
 }
 
 vsize_t Emulator::memsize() const {
@@ -190,26 +179,43 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	for (auto it = argv_vm.rbegin(); it != argv_vm.rend(); ++it)
 		push_stack<vaddr_t>(*it);
 	push_stack<uint32_t>(argv.size());
+
+	// Set breakpoints. Do it here because we have access to symbols
+	set_bps(elf.get_symbols());
 }
 
-void Emulator::set_bp(vaddr_t addr, breakpoint_t bp){
-	size_t i = (addr - load_addr)/4;
-	assert(i < breakpoints.size());
-	breakpoints[i] = bp;
+
+void Emulator::set_bps(const vector<symbol_t>& symbols){
+	set_bp_sym("__libc_malloc", &Emulator::malloc_bp, symbols);
+	set_bp_sym("__free", &Emulator::free_bp, symbols);
+	set_bp_sym("__libc_realloc", &Emulator::realloc_bp, symbols);
+	set_bp_sym("__libc_memalign", &Emulator::memalign_bp, symbols);
+	set_bp_sym("__libc_valloc", &Emulator::valloc_bp, symbols);
+	set_bp_sym("pvalloc", &Emulator::pvalloc_bp, symbols);
+	set_bp_sym("__calloc", &Emulator::calloc_bp, symbols);
+}
+
+void Emulator::set_bp_addr(vaddr_t addr, breakpoint_t bp){
+	assert(addr < breakpoints_bitmap.size());
+	breakpoints[addr] = bp;
 	breakpoints_bitmap[addr] = true;
 }
 
-breakpoint_t Emulator::get_bp(vaddr_t addr) const{
-	size_t i = (addr - load_addr)/4;
-	assert(i < breakpoints.size());
-	return breakpoints[i];
+void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
+                          const vector<symbol_t>& symbols)
+{
+	auto it = symbols.begin();
+	while (it != symbols.end() && it->symbol_name != symbol_name) ++it;
+	if (it == symbols.end())
+		die("Not found symbol %s\n", symbol_name.c_str());
+	set_bp_addr(it->symbol_value, bp);
 }
 
 void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	// Handle breakpoint. It may change pc
 	cycle_t cycles = rdtsc();
 	if (breakpoints_bitmap[pc])
-		(this->*get_bp(pc))();
+		(this->*breakpoints[pc])();
 	local_stats.bp_cycles += _rdtsc() - cycles;
 
 	cycles = rdtsc();

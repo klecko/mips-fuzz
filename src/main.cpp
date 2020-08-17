@@ -130,8 +130,9 @@ int main(){
 	);
 
 	// Run until open before forking
-	// test: 0x00423e8c
-	// xxd:  0x00429e6c
+	// test:    0x00423e8c
+	// xxd:     0x00429e6c
+	// readelf: 0x004c081c
 	try {
 		uint64_t insts = emu.run_until(0x004c081c);
 		cout << "Executed " << insts << " instructions before forking" << endl;

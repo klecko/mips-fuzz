@@ -68,9 +68,9 @@ class Emulator {
 		// Absolute path to current loaded file, used by sys_readlink
 		std::string elfpath;
 
-		// Breakpoints
-		std::vector<breakpoint_t> breakpoints;        // indexed in `get_bp`
-		std::vector<bool>         breakpoints_bitmap; // indexed by address
+		// Breakpoints, indexed by address
+		std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
+		std::vector<bool> breakpoints_bitmap;
 
 		// Load elf into memory, allocate stack and set up argv and company
 		void load_elf(const std::string& filepath,
@@ -81,8 +81,10 @@ class Emulator {
 		void push_stack(T val);
 
 		// Breakpoints
-		void set_bp(vaddr_t addr, breakpoint_t bp);
-		breakpoint_t get_bp(vaddr_t addr) const;
+		void set_bps(const std::vector<symbol_t>& symbols);
+		void set_bp_addr(vaddr_t addr, breakpoint_t bp);
+		void set_bp_sym(const std::string& symbol_name, breakpoint_t bp,
+		                const std::vector<symbol_t>& symbols);
 
 		void test_bp();
 		void malloc_bp();   // __libc_malloc
