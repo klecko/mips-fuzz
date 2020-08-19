@@ -34,8 +34,9 @@ class Rng {
 struct cov_hasher {
 	std::size_t operator()(const cov_t& c) const{
 		std::size_t hash = c.vec.size();
-		for (const vaddr_t& addr : c.vec){
-			hash ^= addr + (hash << 6) + (hash >> 2);
+		for (const auto& jump : c.vec){
+			hash ^= jump.first  + (hash << 6) + (hash >> 2);
+			hash ^= jump.second + (hash << 6) + (hash >> 2);
 		}
 		return hash;
 	}

@@ -25,6 +25,9 @@ enum Reg {
 
 struct RunTimeout : std::exception {};
 
+inline uint32_t branch_hash(vaddr_t from, vaddr_t to){
+	return (from ^ (to + (from << 6) + (from >> 2)));
+}
 
 class Emulator {
 	private:

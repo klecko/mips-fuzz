@@ -212,36 +212,44 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 	dbgprintf("set breakpoint %s at 0x%X\n", symbol_name.c_str(), it->symbol_value);
 }
 
-void Emulator::run_inst(cov_t& cov, Stats& local_stats){
-	// Handle breakpoint. It may change pc
-	cycle_t cycles = rdtsc();
-	if (breakpoints_bitmap[pc])
-		(this->*breakpoints[pc])();
-	local_stats.bp_cycles += _rdtsc() - cycles;
+void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
+	// If given branch has not been taken yet, add it to the coverage
+	uint32_t hash = branch_hash(from, to) % cov.bitmap.size();//(from ^ (to + (from << 6) + (from >> 2))) % cov.bitmap.size();
+	if (!cov.bitmap[hash]){
+		cov.bitmap[hash] = true;
+		cov.vec.push_back(make_pair(from, to));
+	}
+}
 
+void Emulator::run_inst(cov_t& cov, Stats& local_stats){
+	// Handle breakpoint. Record coverage if it changed pc, same as we do in
+	// branches
+	cycle_t cycles = rdtsc();
+	if (breakpoints_bitmap[pc]){
+		vaddr_t pc_bf_bp = pc; // pc before breakpoint
+		(this->*breakpoints[pc])();
+		if (pc != pc_bf_bp)   // pc changed
+			add_coverage(cov, pc_bf_bp, pc);
+	}
+	local_stats.bp_cycles += rdtsc() - cycles;
+
+	// Fetch current instruction
 	cycles = rdtsc();
 	uint32_t inst   = mmu.read_inst(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
 	local_stats.fetch_inst_cycles += rdtsc() - cycles;
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
-	// If needed, take the branch after fetching the current instruction.
+	// If needed, take the branch and register coverage
 	// Otherwise, just increment PC so it points to the next instruction
 	cycles  = rdtsc();
 	prev_pc = pc;
 	if (condition){
-		pc = jump_addr;
+		add_coverage(cov, pc, jump_addr);
+		pc        = jump_addr;
 		condition = false;
 	} else 
 		pc += 4;
-
-	// If we haven't visited this instruction before, mark as visited and add it
-	// to coverage
-	if (!cov.bitmap[pc]){
-		cov.bitmap[pc] = true;
-		cov.vec.push_back(pc);
-	}
-
 	local_stats.jump_cycles += rdtsc() - cycles;
 
 	// Handle current instruction if it isn't a NOP

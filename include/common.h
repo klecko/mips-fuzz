@@ -19,11 +19,11 @@ typedef vaddr_t vsize_t;
 // Structure used for measuring coverage in a single run
 // Take advantage of the bitmap, which is nice for checking if an address has
 // already been visited but is terrible for hashing, and the vector, which is 
-// nice for hashing but is bad for checking if an addres has already been
+// nice for hashing but is bad for checking if an address has already been
 // visited
 struct cov_t {
 	std::vector<bool> bitmap;
-	std::vector<vaddr_t> vec;
+	std::vector<std::pair<vaddr_t, vaddr_t>> vec;
 	bool operator==(const cov_t& other) const {
 		return vec == other.vec;
 	}

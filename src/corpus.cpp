@@ -95,9 +95,9 @@ const std::string& Corpus::get_new_input(int id, Rng& rng){
 void Corpus::report_cov(int id, const cov_t& cov){
 	while (lock_recorded_cov.test_and_set());
 	if (!recorded_cov.count(cov)){
-		// New coverage, add input to corpus and save coverage
-		add_input(mutated_inputs[id]);
-		recorded_cov[cov] = true;
+		// New coverage, save it and add associated input to corpus
+		recorded_cov[cov] = true;      // this is what uses most memory
+		add_input(mutated_inputs[id]); // and not this
 	}
 	lock_recorded_cov.clear();
 }

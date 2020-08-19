@@ -59,6 +59,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 	Rng rng;
 	cycle_t cycles_init, cycles;
 	cov_t cov = { vector<bool>(runner.memsize(), 0) };
+	uint32_t hash;
 	while (true){
 		Stats local_stats;
 		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid noping macro
@@ -69,8 +70,10 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			const string& input = corpus.get_new_input(id, rng);
 
 			// Clear coverage
-			for (const vaddr_t& addr : cov.vec)
-				cov.bitmap[addr] = 0;
+			for (const auto& jump : cov.vec){
+				hash = branch_hash(jump.first, jump.second) % cov.bitmap.size();
+				cov.bitmap[hash] = 0;
+			}
 			cov.vec.clear();
 
 			cycles = rdtsc(); // run_cycles
@@ -86,12 +89,13 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 				cout << "TIMEOUT" << endl;
 				local_stats.timeouts++;
 			}
-			if (SINGLE_RUN)
-				die("end\n");
 			local_stats.run_cycles += rdtsc() - cycles;
 
 			local_stats.cases++;
 			corpus.report_cov(id, cov);
+
+			if (SINGLE_RUN)
+				die("end\n");
 
 			cycles = rdtsc(); // reset_cycles
 			runner.reset(parent);
