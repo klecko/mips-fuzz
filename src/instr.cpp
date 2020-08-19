@@ -388,6 +388,7 @@ void Emulator::inst_bgezal(uint32_t val){
 	regs[Reg::ra]  = pc + 4; // Instruction after the delay slot
 	condition = (inst.s == 0 || regs[inst.s] >= 0);
 	jump_addr = pc + ((int16_t)inst.C << 2);
+	rec_cov   = true;
 }
 
 void Emulator::inst_nop(uint32_t val){ }
@@ -424,12 +425,14 @@ void Emulator::inst_jalr(uint32_t val){
 	set_reg(inst.d, pc+4); // Instruction after the delay slot
 	condition = true;
 	jump_addr = get_reg(inst.s);
+	rec_cov   = true;
 }
 
 void Emulator::inst_beq(uint32_t val){
 	inst_I_t inst(val);
 	condition = (get_reg(inst.s) == get_reg(inst.t));
 	jump_addr = pc + ((int16_t)inst.C << 2);
+	rec_cov   = true;
 }
 
 void Emulator::inst_addu(uint32_t val){
@@ -446,12 +449,14 @@ void Emulator::inst_bne(uint32_t val){
 	inst_I_t inst(val);
 	condition = (get_reg(inst.s) != get_reg(inst.t));
 	jump_addr = pc + ((int16_t)inst.C << 2);
+	rec_cov   = true;
 }
 
 void Emulator::inst_jr(uint32_t val){
 	inst_R_t inst(val);
 	condition = true;
 	jump_addr = get_reg(inst.s);
+	rec_cov   = true;
 }
 
 void Emulator::inst_lhu(uint32_t val){
@@ -533,12 +538,14 @@ void Emulator::inst_bltz(uint32_t val){
 	inst_RI_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) < 0);
 	jump_addr = pc + ((int16_t)inst.C << 2);
+	rec_cov   = true;
 }
 
 void Emulator::inst_blez(uint32_t val){
 	inst_I_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) <= 0);
 	jump_addr = pc + ((int16_t)inst.C << 2);
+	rec_cov   = true;
 }
 
 void Emulator::inst_rdhwr(uint32_t val){
@@ -562,6 +569,7 @@ void Emulator::inst_bgez(uint32_t val){
 	inst_RI_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) >= 0);
 	jump_addr = pc + ((int16_t)inst.C << 2);
+	rec_cov   = true;
 }
 
 void Emulator::inst_slti(uint32_t val){
@@ -591,6 +599,7 @@ void Emulator::inst_jal(uint32_t val){
 	regs[Reg::ra] = pc + 4; // Instruction after the delay slot
 	condition = true;       // 28 bits from A, 4 bits from pc
 	jump_addr = (inst.A << 2) | (pc & 0xF0000000);
+	rec_cov   = true;
 }
 
 void Emulator::inst_lb(uint32_t val){
@@ -772,6 +781,7 @@ void Emulator::inst_j(uint32_t val){
 	inst_J_t inst(val);
 	condition = true;       // 28 bits from A, 4 bits from pc
 	jump_addr = (inst.A << 2) | (pc & 0xF0000000);
+	rec_cov   = true;
 }
 
 void Emulator::inst_ll(uint32_t val){
@@ -797,6 +807,7 @@ void Emulator::inst_bgtz(uint32_t val){
 	inst_I_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) > 0);
 	jump_addr = pc + ((int16_t)inst.C << 2);
+	rec_cov   = true;
 }
 
 void Emulator::inst_mult(uint32_t val){
@@ -978,6 +989,7 @@ void Emulator::inst_bc1(uint32_t val){
 	uint8_t cc = (inst.t >> 2) & 0b111;
 	condition  = (jump_if_true ? get_cc(cc) : !get_cc(cc));
 	jump_addr  = pc + ((int16_t)inst.C << 2);
+	rec_cov    = true;
 }
 
 void Emulator::inst_cfc1(uint32_t val){

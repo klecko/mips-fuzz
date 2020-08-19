@@ -98,6 +98,8 @@ void Corpus::report_cov(int id, const cov_t& cov){
 		// New coverage, save it and add associated input to corpus
 		recorded_cov[cov] = true;      // this is what uses most memory
 		add_input(mutated_inputs[id]); // and not this
+		for (const auto& jump : cov.vec)
+			printf("0x%X --> 0x%X\n", jump.first, jump.second);
 	}
 	lock_recorded_cov.clear();
 }

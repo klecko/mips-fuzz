@@ -51,6 +51,10 @@ class Emulator {
 		bool      condition;
 		vaddr_t   jump_addr;
 
+		// True if coverage must be recorded. It is set after the execution of
+		// every branch, no matter if it's taken or not
+		bool      rec_cov;
+
 		// Address of thread local storage, set by emulated program with
 		// set_thread_area syscall
 		vaddr_t   tls;

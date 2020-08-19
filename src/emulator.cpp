@@ -23,6 +23,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	ccs.reset();
 	condition = false;
 	jump_addr = 0;
+	rec_cov   = false;
 	tls       = 0;
 	running   = false;
 	input     = NULL;
@@ -105,6 +106,7 @@ void Emulator::reset(const Emulator& other){
 	ccs        = other.ccs;
 	condition  = other.condition;
 	jump_addr  = other.jump_addr;
+	rec_cov    = other.rec_cov;
 	tls        = other.tls;
 	running    = other.running;
 	input      = other.input;
@@ -213,8 +215,8 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 }
 
 void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
-	// If given branch has not been taken yet, add it to the coverage
-	uint32_t hash = branch_hash(from, to) % cov.bitmap.size();//(from ^ (to + (from << 6) + (from >> 2))) % cov.bitmap.size();
+	// If given branch has not been seen yet, add it to the coverage
+	uint32_t hash = branch_hash(from, to) % cov.bitmap.size();
 	if (!cov.bitmap[hash]){
 		cov.bitmap[hash] = true;
 		cov.vec.push_back(make_pair(from, to));
@@ -240,16 +242,21 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	local_stats.fetch_inst_cycles += rdtsc() - cycles;
 	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
 
-	// If needed, take the branch and register coverage
+	// If needed, take the branch
 	// Otherwise, just increment PC so it points to the next instruction
 	cycles  = rdtsc();
 	prev_pc = pc;
 	if (condition){
-		add_coverage(cov, pc, jump_addr);
 		pc        = jump_addr;
 		condition = false;
 	} else 
 		pc += 4;
+
+	// No matter if the branch was taken or not, record coverage
+	if (rec_cov){
+		add_coverage(cov, prev_pc, pc);
+		rec_cov = false;
+	}
 	local_stats.jump_cycles += rdtsc() - cycles;
 
 	// Handle current instruction if it isn't a NOP
