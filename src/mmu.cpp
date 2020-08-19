@@ -97,7 +97,7 @@ bool Mmu::set_brk(vaddr_t new_brk){
 }
 
 void Mmu::check_bounds(vaddr_t addr, vsize_t len, uint8_t perm) const {
-	if (addr + len > memory_len)
+	if (addr + len > memory_len) // Allow overflow here (negative len)
 		switch (perm){
 			case PERM_READ:
 				throw Fault(Fault::Type::OutOfBoundsRead, addr);
@@ -162,7 +162,8 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const {
 			else if (perm == PERM_EXEC)
 				throw Fault(Fault::Type::Exec, addr);
 			else if (perms[addr] & PERM_READ)
-				throw Fault(Fault::Type::Uninit, addr);
+				0;
+				//throw Fault(Fault::Type::Uninit, addr);
 			else if (!(perms[addr] & PERM_READ))
 				throw Fault(Fault::Type::Read, addr);
 			else
@@ -234,12 +235,17 @@ vaddr_t Mmu::alloc(vsize_t size){
 	// Check out of memory
 	if (next_alloc + size > stack)
 		die("Out of memory allocating 0x%X bytes\n", size);
+	if (next_alloc + size < next_alloc){
+		dbgprintf("Overflow allocating 0x%X bytes\n", size);
+		return 0;
+	}
 
 	vsize_t aligned_size  = size + 0xF & ~0xF;
 	vaddr_t current_alloc = next_alloc;
 
 	// Memory is by default readable and writable, but not initialized
 	set_perms(current_alloc, size, PERM_READ|PERM_WRITE);
+	set_perms(current_alloc + size, aligned_size - size, PERM_READ);
 
 	// Update next allocation
 	next_alloc += aligned_size;

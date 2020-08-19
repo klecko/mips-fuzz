@@ -58,6 +58,13 @@ size_t Corpus::size() const {
 	return corpus.size();
 }
 
+size_t Corpus::memsize() const {
+	size_t sz = 0;
+	for (const string& s : corpus)
+		sz += s.size();
+	return sz;
+}
+
 size_t Corpus::cov_size() const {
 	return recorded_cov.size();
 }

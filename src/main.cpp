@@ -17,8 +17,8 @@ void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
 	uint32_t elapsed = 0;
 	double minstrps, fcps, reset_time, run_time, run_inst_time, inst_handl_time,
-	       fetch_inst_time, jump_time, bp_time, timeout_time;
-	uint64_t cases, uniq_crashes, crashes, timeouts, cov;
+	       fetch_inst_time, jump_time, bp_time, timeout_time, corpus_sz;
+	uint64_t cases, uniq_crashes, crashes, timeouts, cov, corpus_n;
 	while (true){
 		this_thread::sleep_for(chrono::seconds(1));
 		elapsed++;
@@ -26,6 +26,8 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		minstrps        = (double)stats.instr / (elapsed * 1000000);
 		fcps            = (double)cases / elapsed;
 		cov             = corpus.cov_size();
+		corpus_n        = corpus.size();
+		corpus_sz       = (double)corpus.memsize() / 1024;
 		uniq_crashes    = corpus.uniq_crashes_size();
 		crashes         = stats.crashes;
 		timeouts        = stats.timeouts;
@@ -38,9 +40,10 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		bp_time         = (double)stats.bp_cycles / stats.total_cycles;
 		timeout_time    = (double)stats.timeout_cycles / stats.total_cycles;
 		printf("[%u secs] cases: %lu, minstr/s: %.3f, fcps: %.3f, cov: %lu, "
-		       "uniq crashes: %lu, crashes: %lu, timeouts: %lu\n",
-			   elapsed, cases, minstrps, fcps, cov, uniq_crashes, crashes,
-			   timeouts);
+		       "corpus: %lu/%.3fKB, uniq crashes: %lu, crashes: %lu, "
+			   "timeouts: %lu\n",
+			   elapsed, cases, minstrps, fcps, cov, corpus_n, corpus_sz,
+			   uniq_crashes, crashes, timeouts);
 
 		if (!TIMETRACE) continue;
 		printf("\treset: %.3f, run: %.3f, run_inst: %.3f, inst_handl: %.3f, "
@@ -130,7 +133,7 @@ int main(){
 	);
 
 	// Run until open before forking
-	// test:    0x00423e8c
+	// test:    0x00423e8c | 0x41d6e4
 	// xxd:     0x00429e6c
 	// readelf: 0x004c081c
 	try {

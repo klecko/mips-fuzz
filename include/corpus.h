@@ -76,6 +76,7 @@ class Corpus {
 		Corpus(int nthreads, const std::string& path);
 
 		size_t size() const;
+		size_t memsize() const;
 		size_t cov_size() const;
 		size_t uniq_crashes_size() const;
 

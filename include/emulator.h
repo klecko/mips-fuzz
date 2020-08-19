@@ -121,6 +121,7 @@ class Emulator {
 							uint32_t& error);
 		uint32_t sys_ioctl(uint32_t fd, uint32_t request, vaddr_t argp,
 		                   uint32_t& error);
+		uint32_t sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& error);
 
 		void handle_syscall(uint32_t syscall);
 

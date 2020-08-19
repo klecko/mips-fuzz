@@ -209,6 +209,7 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 	if (it == symbols.end())
 		die("Not found symbol %s\n", symbol_name.c_str());
 	set_bp_addr(it->symbol_value, bp);
+	dbgprintf("set breakpoint %s at 0x%X\n", symbol_name.c_str(), it->symbol_value);
 }
 
 void Emulator::run_inst(cov_t& cov, Stats& local_stats){
@@ -333,7 +334,8 @@ void Emulator::calloc_bp(){
 
 	// Perform allocation and set memory to zero
 	vaddr_t addr = (alloc_sz > 0 ? mmu.alloc(alloc_sz) : 0);
-	char zero[alloc_sz] = {0};
+	void* zero = alloca(alloc_sz);
+	memset(zero, 0, alloc_sz);
 	mmu.write_mem(addr, zero, sizeof(zero));
 
 	regs[Reg::v0] = addr;
@@ -641,6 +643,13 @@ uint32_t Emulator::sys_ioctl(uint32_t fd, uint32_t request, vaddr_t argp,
 	return -1;
 }
 
+uint32_t Emulator::sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& error){
+	string pathname = mmu.read_string(pathname_addr);
+	dbgprintf("access(%s, %d) --> -1\n", pathname.c_str(), mode);
+	error = 1;
+	return -1;
+}
+
 void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
 		case 4001: // exit
@@ -670,6 +679,10 @@ void Emulator::handle_syscall(uint32_t syscall){
 
 		case 4006: // close
 			regs[Reg::v0] = sys_close(regs[Reg::a0], regs[Reg::a3]);
+			break;
+
+		case 4033: // access
+			regs[Reg::v0] = sys_access(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
 			break;
 
 		case 4045: // brk
