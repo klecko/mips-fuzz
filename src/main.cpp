@@ -1,6 +1,7 @@
 #include <iostream>
 #include <thread>
 #include <cstring>
+#include <sched.h>
 #include "common.h"
 #include "emulator.h"
 #include "corpus.h"
@@ -150,11 +151,18 @@ int main(){
 		return -1;
 	}
 
-	// Create worker threads
+	// Create worker threads and assign each to one core
+	cpu_set_t cpu;
 	vector<thread> threads;
-	for (int i = 0; i < num_threads; i++)
-		threads.push_back(thread(worker, i, emu.fork(), ref(emu), ref(corpus),
-		                         ref(stats)));
+	for (int i = 0; i < num_threads; i++){
+		thread t = thread(worker, i, emu.fork(), ref(emu), ref(corpus),
+		                  ref(stats));
+		CPU_ZERO(&cpu);
+		CPU_SET(i, &cpu);
+		if (pthread_setaffinity_np(t.native_handle(), sizeof(cpu), &cpu) != 0)
+			perror("pthread_setaffinity_np");
+		threads.push_back(move(t));
+	}
 
 	// Create stats thread
 	threads.push_back(thread(print_stats, ref(stats), ref(corpus)));
