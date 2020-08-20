@@ -32,9 +32,9 @@ class Rng {
 
 // Coverage hasher
 struct cov_hasher {
-	std::size_t operator()(const cov_t& c) const{
-		std::size_t hash = c.vec.size();
-		for (const auto& jump : c.vec){
+	std::size_t operator()(const cov_vec_t& c) const{
+		std::size_t hash = c.size();
+		for (const auto& jump : c){
 			hash ^= jump.first  + (hash << 6) + (hash >> 2);
 			hash ^= jump.second + (hash << 6) + (hash >> 2);
 		}
@@ -43,7 +43,7 @@ struct cov_hasher {
 };
 
 // Type used for storing recorded coverage across runs
-typedef std::unordered_map<cov_t, bool, cov_hasher> recorded_cov_t;
+typedef std::unordered_map<cov_vec_t, bool, cov_hasher> recorded_cov_t;
 
 // Type used for storing unique crashes. May be changed by a hash table
 typedef std::vector<std::pair<vaddr_t, Fault>> crashes_t;

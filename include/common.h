@@ -21,9 +21,10 @@ typedef vaddr_t vsize_t;
 // already been visited but is terrible for hashing, and the vector, which is 
 // nice for hashing but is bad for checking if an address has already been
 // visited
+typedef std::vector<std::pair<vaddr_t, vaddr_t>> cov_vec_t;
 struct cov_t {
 	std::vector<bool> bitmap;
-	std::vector<std::pair<vaddr_t, vaddr_t>> vec;
+	cov_vec_t vec;
 	bool operator==(const cov_t& other) const {
 		return vec == other.vec;
 	}
