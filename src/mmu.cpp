@@ -65,6 +65,10 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.dirty_bitmap, second.dirty_bitmap);
 }
 
+uint8_t* Mmu::get_memory(){
+	return memory;
+}
+
 vsize_t Mmu::size() const {
 	return memory_len;
 }

@@ -291,6 +291,31 @@ void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 	}
 }
 
+void Emulator::run_jit(const string& input, cov_t& cov, Stats& local_stats){
+	// Save provided input. Internal representation is as const char* and not
+	// as string so we don't have to perform any copy.
+	this->input    = input.c_str();
+	this->input_sz = input.size();
+
+	jit_state state = {
+		regs,
+		fpregs,
+		mmu.get_memory(),
+	};
+
+	running = true;
+	jit_block_t jit_block;
+	while (running){
+		if (jit_cache.count(pc))
+			jit_block = jit_cache[pc];
+		else {
+			jit_block = compile_jit(pc);
+			jit_cache[pc] = jit_block;
+		}
+		jit_block(state);
+	}
+}
+
 uint64_t Emulator::run_until(vaddr_t pc){
 	Stats dummy;
 	cov_t dummy2 = { vector<bool>(memsize(), 0) };

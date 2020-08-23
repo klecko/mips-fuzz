@@ -16,6 +16,13 @@ class Emulator;
 typedef void (Emulator::*const inst_handler_t)(uint32_t);
 typedef void (Emulator::*breakpoint_t)();
 
+struct jit_state {
+	uint32_t* regs;
+	float*    fpregs;
+	uint8_t*  memory;
+};
+typedef void (*jit_block_t)(jit_state);
+
 enum Reg {
 	zero, at, v0, v1, a0, a1, a2, a3,
 	t0,   t1, t2, t3, t4, t5, t6, t7,
@@ -78,6 +85,9 @@ class Emulator {
 		// Breakpoints, indexed by address
 		std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
 		std::vector<bool> breakpoints_bitmap;
+
+		// JIT stuff
+		std::unordered_map<vaddr_t, jit_block_t> jit_cache;
 
 		// Load elf into memory, allocate stack and set up argv and company
 		void load_elf(const std::string& filepath,
@@ -164,6 +174,8 @@ class Emulator {
 
 		// Perform run with provided input. May throw Fault or RunTimeout
 		void run(const std::string& input, cov_t& cov, Stats& local_stats);
+
+		void run_jit(const std::string& input, cov_t& cov, Stats& local_stats);
 
 		// Run emulator until given address, return the number of instructions
 		// executed

@@ -85,6 +85,8 @@ class Mmu {
 
 		Mmu& operator=(Mmu other);
 
+		uint8_t* get_memory();
+
 		vsize_t size() const;
 
 		// Get current brk. Attempt to set new brk, performing size checks
