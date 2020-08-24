@@ -5,10 +5,10 @@
 #include <cstdlib>
 #include <vector>
 
-#define DEBUG        0
+#define DEBUG        1
 #define TIMETRACE    0
-#define GUEST_OUTPUT 0
-#define SINGLE_RUN   0
+#define GUEST_OUTPUT 1
+#define SINGLE_RUN   1
 
 // Type used for guest virtual addresses
 typedef uint32_t vaddr_t;
@@ -29,6 +29,15 @@ struct cov_t {
 		return vec == other.vec;
 	}
 };
+
+// JIT stuff
+struct jit_state {
+	uint32_t* regs;
+	float*    fpregs;
+	uint8_t*  memory;
+};
+
+typedef void (*jit_block_t)(jit_state*);
 
 #if DEBUG == 1
 #define dbgprintf(...) printf(__VA_ARGS__)

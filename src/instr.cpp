@@ -2,6 +2,7 @@
 #include <cstring> // memcpy
 #include <cmath>   // isnan
 #include "emulator.h"
+#include "inst_decoding.h"
 
 using namespace std;
 
@@ -386,7 +387,7 @@ void Emulator::inst_or(uint32_t val){
 void Emulator::inst_bgezal(uint32_t val){
 	inst_RI_t inst(val);
 	regs[Reg::ra]  = pc + 4; // Instruction after the delay slot
-	condition = (inst.s == 0 || regs[inst.s] >= 0);
+	condition = ((int32_t)get_reg(inst.s) >= 0);
 	jump_addr = pc + ((int16_t)inst.C << 2);
 	rec_cov   = true;
 }

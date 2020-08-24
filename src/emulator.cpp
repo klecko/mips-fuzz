@@ -291,7 +291,9 @@ void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 	}
 }
 
-void Emulator::run_jit(const string& input, cov_t& cov, Stats& local_stats){
+void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
+                       Stats& local_stats)
+{
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
 	this->input    = input.c_str();
@@ -306,13 +308,15 @@ void Emulator::run_jit(const string& input, cov_t& cov, Stats& local_stats){
 	running = true;
 	jit_block_t jit_block;
 	while (running){
-		if (jit_cache.count(pc))
-			jit_block = jit_cache[pc];
-		else {
-			jit_block = compile_jit(pc);
-			jit_cache[pc] = jit_block;
+		if (!jit_cache.is_cached(pc)){
+			Jitter jitter(pc, mmu);
+			jit_cache.add(pc, jitter.get_code());
 		}
-		jit_block(state);
+		jit_block = jit_cache.get(pc);
+		cout << *this << endl << endl;
+		jit_block(&state);
+		cout << *this << endl;
+		die("done\n");
 	}
 }
 

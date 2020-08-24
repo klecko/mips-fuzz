@@ -55,7 +55,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 }
 
 void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
-            Stats& stats)
+            JitCache& jit_cache, Stats& stats)
 {
 	Rng rng;
 	cycle_t cycles_init, cycles;
@@ -79,7 +79,8 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 
 			cycles = rdtsc(); // run_cycles
 			try {
-				runner.run(input, cov, local_stats);
+				//runner.run(input, cov, local_stats);
+				runner.run_jit(input, cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
@@ -131,6 +132,7 @@ int main(){
 	// Create shared objects
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
+	JitCache jit_cache(8*1024);
 	Emulator emu(
 		8 * 1024 * 1024,                // memory
 		"../test_bins/readelf",         // path to elf
@@ -141,7 +143,7 @@ int main(){
 	// test:    0x00423e8c | 0x41d6e4
 	// xxd:     0x00429e6c
 	// readelf: 0x004c081c
-	try {
+	/* try {
 		uint64_t insts = emu.run_until(0x004c081c);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
@@ -149,14 +151,14 @@ int main(){
 		cout << "[PC: 0x" << hex << emu.get_prev_pc() << "] " << f << endl;
 		cout << emu << endl;
 		return -1;
-	}
+	} */
 
 	// Create worker threads and assign each to one core
 	cpu_set_t cpu;
 	vector<thread> threads;
 	for (int i = 0; i < num_threads; i++){
 		thread t = thread(worker, i, emu.fork(), ref(emu), ref(corpus),
-		                  ref(stats));
+		                  ref(jit_cache), ref(stats));
 		CPU_ZERO(&cpu);
 		CPU_SET(i, &cpu);
 		if (pthread_setaffinity_np(t.native_handle(), sizeof(cpu), &cpu) != 0)

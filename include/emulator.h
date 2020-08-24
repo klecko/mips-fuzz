@@ -5,6 +5,8 @@
 #include "mmu.h"
 #include "file.h"
 #include "stats.h"
+#include "jit_cache.h"
+#include "jitter.h"
 #include "common.h"
 
 /* Idea: memory loaded files appart from input file. 
@@ -13,22 +15,8 @@ std::unordered_map<std::string, std::pair<char*, size_t>> loaded_files;
 */
 
 class Emulator;
-typedef void (Emulator::*const inst_handler_t)(uint32_t);
 typedef void (Emulator::*breakpoint_t)();
-
-struct jit_state {
-	uint32_t* regs;
-	float*    fpregs;
-	uint8_t*  memory;
-};
-typedef void (*jit_block_t)(jit_state);
-
-enum Reg {
-	zero, at, v0, v1, a0, a1, a2, a3,
-	t0,   t1, t2, t3, t4, t5, t6, t7,
-	s0,   s1, s2, s3, s4, s5, s6, s7,
-	t8,   t9, k0, k1, gp, sp, fp, ra,
-};
+typedef void (Emulator::*const inst_handler_t)(uint32_t);
 
 struct RunTimeout : std::exception {};
 
@@ -85,9 +73,6 @@ class Emulator {
 		// Breakpoints, indexed by address
 		std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
 		std::vector<bool> breakpoints_bitmap;
-
-		// JIT stuff
-		std::unordered_map<vaddr_t, jit_block_t> jit_cache;
 
 		// Load elf into memory, allocate stack and set up argv and company
 		void load_elf(const std::string& filepath,
@@ -175,7 +160,8 @@ class Emulator {
 		// Perform run with provided input. May throw Fault or RunTimeout
 		void run(const std::string& input, cov_t& cov, Stats& local_stats);
 
-		void run_jit(const std::string& input, cov_t& cov, Stats& local_stats);
+		void run_jit(const std::string& input, cov_t& cov, JitCache& jit_cache,
+		             Stats& local_stats);
 
 		// Run emulator until given address, return the number of instructions
 		// executed
@@ -293,64 +279,5 @@ void Emulator::push_stack(T val){
 	regs[Reg::sp] -= sizeof(T);
 	mmu.write<T>(regs[Reg::sp], val);
 }
-
-struct inst_R_t {
-	uint8_t s;
-	uint8_t t;
-	uint8_t d;
-	uint8_t S;
-	
-	inst_R_t(uint32_t inst){
-		s = (inst >> 21) & 0b00011111;
-		t = (inst >> 16) & 0b00011111;
-		d = (inst >> 11) & 0b00011111;
-		S = (inst >> 6)  & 0b00011111;
-	}
-};
-
-struct inst_RI_t {
-	uint8_t  s;
-	uint16_t C;
-	
-	inst_RI_t(uint32_t inst){
-		s = (inst >> 21) & 0b00011111;
-		C = inst & 0xFFFF;
-	}
-};
-
-struct inst_I_t {
-	uint8_t  s;
-	uint8_t  t;
-	uint16_t C;
-
-	inst_I_t(uint32_t inst){
-		s = (inst >> 21) & 0b00011111;
-		t = (inst >> 16) & 0b00011111;
-		C = inst & 0xFFFF;
-	}
-};
-
-struct inst_J_t {
-	uint32_t A;
-
-	inst_J_t(uint32_t inst){ // 26 bits
-		A = inst & 0x3FFFFFF;
-	}
-};
-
-// Used for FPU
-struct inst_F_t {
-	uint8_t t;
-	uint8_t s;
-	uint8_t d;
-	uint8_t funct;
-
-	inst_F_t(uint32_t inst){
-		t     = (inst >> 16) & 0b00011111;
-		s     = (inst >> 11) & 0b00011111;
-		d     = (inst >> 6)  & 0b00011111;
-		funct = inst & 0b00111111;
-	}
-};
 
 #endif
