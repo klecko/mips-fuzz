@@ -56,6 +56,8 @@ class Jitter {
 
 		llvm::Value* get_pmemory(llvm::Value* addr);
 
+		void generate_indirect_branch(llvm::Value* reenter_pc);
+
 		void generate_fault(llvm::Value* fault_type, llvm::Value* addr);
 
 		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm);
@@ -181,6 +183,7 @@ class Jitter {
 		bool inst_c_cond_d(vaddr_t, uint32_t);
 		bool inst_bc1(vaddr_t, uint32_t);
 		bool inst_cfc1(vaddr_t, uint32_t);
+		bool inst_ins(vaddr_t, uint32_t);
 };
 
 

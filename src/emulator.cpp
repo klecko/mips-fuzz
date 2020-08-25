@@ -335,7 +335,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
 		}
 		pc = exit_inf.reenter_pc;
 		prev_pc = pc; // not sure about this, we'll see
-		die("done\n");
+		//die("done\n");
 	}
 }
 
@@ -714,6 +714,7 @@ uint32_t Emulator::sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& er
 }
 
 void Emulator::handle_syscall(uint32_t syscall){
+	die("sys: %d\n", syscall);
 	switch (syscall){
 		case 4001: // exit
 		case 4246: // exit_group

@@ -611,7 +611,7 @@ void Emulator::inst_lb(uint32_t val){
 
 void Emulator::inst_nor(uint32_t val){
 	inst_R_t inst(val);
-	set_reg(inst.d, ~(get_reg(inst.d) | get_reg(inst.t)));
+	set_reg(inst.d, ~(get_reg(inst.s) | get_reg(inst.t)));
 }
 
 void Emulator::inst_bshfl(uint32_t val){
