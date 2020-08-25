@@ -22,6 +22,7 @@ using namespace std;
 Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	mmu(_mmu), module("module", context), builder(context)
 {
+	printf("jitting 0x%X\n", pc);
 	// PC in hex
 	ostringstream oss;
 	oss << hex << pc;
@@ -29,23 +30,42 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 
 	// Get types
 	llvm::Type* void_ty      = llvm::Type::getVoidTy(context);
+	llvm::Type* int32_ty     = llvm::Type::getInt32Ty(context);
+	llvm::Type* int64_ty     = llvm::Type::getInt64Ty(context);
 	llvm::Type* p_int32_ty   = llvm::Type::getInt32PtrTy(context);
 	llvm::Type* p_float_ty   = llvm::Type::getFloatPtrTy(context);
 	llvm::Type* p_int8_ty    = llvm::Type::getInt8PtrTy(context);
-	llvm::Type* jit_state_ty = llvm::StructType::get(
-		context,
+
+	llvm::Type* jit_state_ty = llvm::StructType::get(context,
 		{
-			p_int32_ty,
-			p_float_ty,
-			p_int8_ty,
+			p_int32_ty, // regs
+			p_float_ty, // fpregs
+			p_int8_ty,  // memory
+			p_int8_ty,  // perms
 		}
 	);
 	llvm::Type* p_jit_state_ty = llvm::PointerType::get(jit_state_ty, 0);
 
+	llvm::Type* fault_ty = llvm::StructType::get(context,
+		{
+			int64_ty, // padding, std::exception stuff
+			int32_ty, // type
+			int32_ty, // fault_addr
+		}
+	);
+	llvm::Type* exit_info_ty = llvm::StructType::get(context,
+		{
+			int32_ty, // reason
+			int32_ty, // pc
+			fault_ty, // fault
+		}
+	);
+	llvm::Type* p_exit_info_ty = llvm::PointerType::get(exit_info_ty, 0);
+
 	// Create function
 	llvm::FunctionType* function_type = llvm::FunctionType::get(
 		void_ty,          // ret
-		{p_jit_state_ty}, // args
+		{p_jit_state_ty, p_exit_info_ty}, // args
 		false             // varargs
 	);
 	function = llvm::Function::Create(
@@ -59,14 +79,12 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	llvm::BasicBlock* bb = create_block(pc);
 
 	// JIT module
+	llvm::errs() << module;
 	if (llvm::verifyModule(module, &llvm::errs())){
-		llvm::errs() << module;
 		die("bad module\n");
 	}
 
 	code = compile(module);
-
-	llvm::errs() << module;
 }
 
 string Jitter::compile(llvm::Module& module){
@@ -130,6 +148,286 @@ void Jitter::set_reg(uint8_t reg, llvm::Value* val){
 void Jitter::set_reg(uint8_t reg, uint32_t val){
 	llvm::Value* v = llvm::ConstantInt::get(context, llvm::APInt(32, val));
 	set_reg(reg, v);
+}
+
+llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
+	llvm::Type* int32_ty = llvm::Type::getInt32Ty(context);
+
+	llvm::Value* state = &function->arg_begin()[0];
+	llvm::Value* pp_memory = builder.CreateInBoundsGEP(
+		state,
+		{
+			llvm::ConstantInt::get(int32_ty, 0), // *state
+			llvm::ConstantInt::get(int32_ty, 2), // state->memory
+		},
+		"pp_memory"
+	);
+	llvm::Value* p_memory = builder.CreateLoad(pp_memory, "p_memory");
+	llvm::Value* p_value = builder.CreateInBoundsGEP(
+		p_memory,
+		{ addr },
+		"p_value"
+	);
+	return p_value;
+}
+
+llvm::Type* get_int_ptr_ty(vsize_t sz, llvm::LLVMContext& context){
+	llvm::Type* type;
+	switch (sz){
+		case 1:
+			type = llvm::Type::getInt8PtrTy(context);
+			break;
+		case 2:
+			type = llvm::Type::getInt16PtrTy(context);
+			break;
+		case 4:
+			type = llvm::Type::getInt32PtrTy(context);
+			break;
+		default:
+			die("unsupported ptr size: %d\n", sz);
+	}
+	return type;
+}
+
+void Jitter::generate_fault(llvm::Value* fault_type, llvm::Value* addr){
+	llvm::Type* int32_ty = llvm::Type::getInt32Ty(context);
+	llvm::Value* p_exit_info = &function->arg_begin()[1];
+	llvm::Value* p_exit_reason = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 0),
+		},
+		"p_exit_reason"
+	);
+	llvm::Value* p_pc = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 1),
+		},
+		"p_pc"
+	);
+	llvm::Value* p_fault_type = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 2),
+			llvm::ConstantInt::get(int32_ty, 1), // 0 is padding
+		},
+		"p_fault_type"
+	);
+	llvm::Value* p_fault_addr = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 2),
+			llvm::ConstantInt::get(int32_ty, 2), // 0 is padding
+		},
+		"p_fault_addr"
+	);
+
+	builder.CreateStore(
+		llvm::ConstantInt::get(int32_ty, exit_info::ExitReason::Fault),
+		p_exit_reason
+	);
+	builder.CreateStore(llvm::ConstantInt::get(int32_ty, -1), p_pc);
+	builder.CreateStore(fault_type, p_fault_type);
+	builder.CreateStore(addr, p_fault_addr);
+}
+
+void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm){
+	llvm::Type* int32_ty = llvm::Type::getInt32Ty(context);
+
+	// Get fault type in case we have go the fault path
+	llvm::Value* fault_type;
+	switch (perm){
+		case Mmu::PERM_READ:
+			fault_type =
+				llvm::ConstantInt::get(int32_ty, Fault::Type::OutOfBoundsRead);
+			break;
+		case Mmu::PERM_WRITE:
+			fault_type =
+				llvm::ConstantInt::get(int32_ty, Fault::Type::OutOfBoundsWrite);
+			break;
+		case Mmu::PERM_EXEC:
+			fault_type =
+				llvm::ConstantInt::get(int32_ty, Fault::Type::OutOfBoundsExec);
+			break;
+		default:
+			die("Wrong permissions check_bounds\n");
+	}
+
+	// Create both paths, compare and branch
+	llvm::BasicBlock* fault_path =
+		llvm::BasicBlock::Create(context, "fault_bounds", function);
+	llvm::BasicBlock* nofault_path =
+		llvm::BasicBlock::Create(context, "nofault_bounds", function);
+	llvm::Value* memsize = llvm::ConstantInt::get(int32_ty, mmu.size());
+	llvm::Value* last_addr = builder.CreateAdd(
+		addr,
+		llvm::ConstantInt::get(int32_ty, len),
+		"last_addr"
+	);
+	llvm::Value* cmp = builder.CreateICmpUGT(last_addr, memsize, "cmp_bounds");
+	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
+
+	// Fault path
+	builder.SetInsertPoint(fault_path);
+	generate_fault(fault_type, addr);
+	builder.CreateRetVoid();
+
+	// Continue building nofault path
+	builder.SetInsertPoint(nofault_path);
+}
+
+void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm){
+	llvm::Type* int32_ty = llvm::Type::getInt32Ty(context);
+	llvm::Type* ptr_ty   = get_int_ptr_ty(len, context);
+
+	// Get fault type in case we have go the fault path
+	llvm::Value* fault_type;
+	switch (perm){
+		case Mmu::PERM_READ:
+			fault_type = llvm::ConstantInt::get(int32_ty, Fault::Type::Read);
+			break;
+		case Mmu::PERM_WRITE:
+			fault_type = llvm::ConstantInt::get(int32_ty, Fault::Type::Write);
+			break;
+		case Mmu::PERM_EXEC:
+			fault_type = llvm::ConstantInt::get(int32_ty, Fault::Type::Exec);
+			break;
+		default:
+			die("Wrong permissions check_perms\n");
+	}
+
+	// Compute permission mask for given len
+	uint32_t perms_mask = 0;
+	for (int i = 0; i < len; i++)
+		perms_mask |= (perm << (i*8));
+	llvm::Value* perms_mask_val = llvm::ConstantInt::get(int32_ty, perms_mask);
+
+	// Create both paths
+	llvm::BasicBlock* fault_path =
+		llvm::BasicBlock::Create(context, "fault_perms", function);
+	llvm::BasicBlock* nofault_path =
+		llvm::BasicBlock::Create(context, "nofault_perms", function);
+
+	// Get pointer to permissions value, cast it and load its value
+	llvm::Value* state = &function->arg_begin()[0];
+	llvm::Value* pp_perms = builder.CreateInBoundsGEP(
+		state,
+		{
+			llvm::ConstantInt::get(int32_ty, 0), // *state
+			llvm::ConstantInt::get(int32_ty, 3), // state->perms
+		},
+		"pp_perms"
+	);
+	llvm::Value* p_perms = builder.CreateLoad(pp_perms, "p_perms");
+	llvm::Value* p_perm  = builder.CreateInBoundsGEP(
+		p_perms,
+		{ addr },
+		"p_perm"
+	);
+	llvm::Value* p_perm_cast =
+		builder.CreateBitCast(p_perm, ptr_ty, "p_perm_cast");
+	llvm::Value* perm_val = builder.CreateLoad(p_perm_cast, "perm");
+
+	// And it with perm_masks, check if they're equal and branch
+	llvm::Value* result = builder.CreateAnd(perm_val, perms_mask_val);
+	llvm::Value* cmp = builder.CreateICmpNE(result, perms_mask_val, "cmp_perms");
+	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
+
+	// Fault path
+	builder.SetInsertPoint(fault_path);
+	generate_fault(fault_type, addr);
+	builder.CreateRetVoid();
+
+	// Continue building nofault path
+	builder.SetInsertPoint(nofault_path);
+}
+
+void Jitter::check_alignment_mem(llvm::Value* addr, uint8_t perm){
+	llvm::Type* int32_ty = llvm::Type::getInt32Ty(context);
+
+	// Get fault type in case we have go the fault path
+	llvm::Value* fault_type;
+	switch (perm){
+		case Mmu::PERM_READ:
+			fault_type =
+				llvm::ConstantInt::get(int32_ty, Fault::Type::MisalignedRead);
+			break;
+		case Mmu::PERM_WRITE:
+			fault_type =
+				llvm::ConstantInt::get(int32_ty, Fault::Type::MisalignedWrite);
+			break;
+		case Mmu::PERM_EXEC:
+			fault_type =
+				llvm::ConstantInt::get(int32_ty, Fault::Type::MisalignedExec);
+			break;
+		default:
+			die("Wrong permissions check_alignment\n");
+	}
+
+	// Create both paths
+	llvm::BasicBlock* fault_path =
+		llvm::BasicBlock::Create(context, "fault_align", function);
+	llvm::BasicBlock* nofault_path =
+		llvm::BasicBlock::Create(context, "nofault_align", function);
+
+	// Check alignment and branch
+	llvm::Value* addr_masked = builder.CreateAnd(
+		addr,
+		llvm::ConstantInt::get(int32_ty, 3)
+	);
+	llvm::Value* cmp = builder.CreateICmpNE(
+		addr_masked,
+		llvm::ConstantInt::get(int32_ty, 0),
+		"cmp_align"
+	);
+	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
+
+	// Fault path
+	builder.SetInsertPoint(fault_path);
+	generate_fault(fault_type, addr);
+	builder.CreateRetVoid();
+
+	// Continue building nofault path
+	builder.SetInsertPoint(nofault_path);
+}
+
+llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len){
+	// Check out of bounds
+	check_bounds_mem(addr, len, Mmu::PERM_READ);
+
+	// Check permissions
+	check_perms_mem(addr, len, Mmu::PERM_READ);
+
+	// Check alignment
+	check_alignment_mem(addr, Mmu::PERM_READ);
+
+	// Get pointer to memory position, cast it and read from it
+	llvm::Value* p_value      = get_pmemory(addr);
+	llvm::Type*  cast_type    = get_int_ptr_ty(len, context);
+	llvm::Value* p_value_cast = builder.CreateBitCast(p_value, cast_type);
+	return builder.CreateLoad(p_value_cast);
+}
+
+void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len){
+	// Check out of bounds
+	check_bounds_mem(addr, len, Mmu::PERM_WRITE);
+
+	// Check permissions
+	check_perms_mem(addr, len, Mmu::PERM_WRITE);
+
+	// Check alignment
+	check_alignment_mem(addr, Mmu::PERM_WRITE);
+
+	// Get pointer to memory position, cast it and write to it
+	llvm::Value* p_value      = get_pmemory(addr);
+	llvm::Type*  cast_type    = get_int_ptr_ty(len, context);
+	llvm::Value* p_value_cast = builder.CreateBitCast(p_value, cast_type);
+	builder.CreateStore(value, p_value_cast);
 }
 
 llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
@@ -260,10 +558,12 @@ bool Jitter::inst_addiu(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_lw(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
+	inst_I_t inst(val);
+	llvm::Value* offs = 
+		llvm::ConstantInt::get(context, llvm::APInt(32, (int16_t)inst.C, true));
+	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
+	set_reg(inst.t, read_mem(addr, 4));
 	return false;
-	//llvm::errs() << module;
-	//exit(0);
 }
 
 bool Jitter::inst_and(vaddr_t pc, uint32_t val){
@@ -273,7 +573,11 @@ bool Jitter::inst_and(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_sw(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
+	inst_I_t inst(val);
+	llvm::Value* offs = 
+		llvm::ConstantInt::get(context, llvm::APInt(32, (int16_t)inst.C, true));
+	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
+	write_mem(addr, get_reg(inst.t), 4);
 	return false;
 }
 
@@ -284,476 +588,497 @@ bool Jitter::inst_jalr(vaddr_t pc, uint32_t val){
 	// Set return address
 	set_reg(Reg::ra, pc+4);
 
+	// Set exit info and finish compilation
 	inst_RI_t inst(val);
+	llvm::Type*  int32_ty = llvm::Type::getInt32Ty(context);
+	llvm::Value* p_exit_info = &function->arg_begin()[1];
+	llvm::Value* p_exit_reason = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 0),
+		},
+		"p_exit_reason"
+	);
+	llvm::Value* p_pc = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 1),
+		},
+		"p_pc"
+	);
+	builder.CreateStore(llvm::ConstantInt::get(int32_ty, exit_info::ExitReason::IndirectBranch), p_exit_reason);
+	builder.CreateStore(get_reg(inst.s), p_pc);
 	builder.CreateRetVoid();
 	return true;
 }
 
 bool Jitter::inst_beq(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_addu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sll(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_bne(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_jr(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_lhu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_syscall(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_xor(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sltu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sltiu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_movn(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_movz(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_subu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_teq(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_div(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_divu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mflo(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mul(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_rdhwr(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_slti(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_andi(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_ori(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_xori(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_pref(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_lb(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_nor(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_bshfl(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_seh(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_seb(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_wsbh(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_srl(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_lh(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_lbu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sb(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sh(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sllv(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_srlv(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_slt(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sub(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_add(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_j(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_ll(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sc(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sync(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mult(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_multu(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mfhi(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mthi(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mtlo(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_ext(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sra(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_clz(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_lwc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_swc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_ldc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_sdc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_fmt_s(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_fmt_d(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_fmt_w(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_fmt_l(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_fmt_ps(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mfc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mfhc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mtc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_mthc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_c_cond_s(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_c_cond_d(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_bc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
 bool Jitter::inst_cfc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s\n", __func__);
 	llvm::errs() << module;
+	printf("unimplemented %s at 0x%X\n", __func__, pc);
 	exit(0);
 }
 
@@ -1100,3 +1425,15 @@ const inst_handler_jit_t Jitter::inst_handlers_COP1[] = {
 	&Jitter::inst_unimplemented, // 11 110
 	&Jitter::inst_unimplemented, // 11 111
 };
+
+const char* exit_reason_map[] = {
+	"syscall", "fault", "indirect branch",
+};
+ostream& operator<<(ostream& os, const exit_info& exit_inf){
+	assert(exit_inf.reason < sizeof(exit_reason_map)/sizeof(const char*));
+	os << "Exit reason: " << exit_reason_map[exit_inf.reason]
+	   << "; reenter pc: 0x" << hex << exit_inf.reenter_pc;
+	if (exit_inf.reason == exit_info::ExitReason::Fault)
+		os << "; Fault: " << exit_inf.fault;
+	return os;
+}

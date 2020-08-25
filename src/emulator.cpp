@@ -133,6 +133,7 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 
 	// Set entry
 	pc = elf.get_entry();
+	prev_pc = pc;
 	dbgprintf("Entry 0x%X\n", pc);
 
 	// Allocate the stack
@@ -303,19 +304,37 @@ void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
 		regs,
 		fpregs,
 		mmu.get_memory(),
+		mmu.get_perms(),
 	};
+
+	exit_info exit_inf;
 
 	running = true;
 	jit_block_t jit_block;
 	while (running){
+		// Get the JIT block and run it
 		if (!jit_cache.is_cached(pc)){
 			Jitter jitter(pc, mmu);
 			jit_cache.add(pc, jitter.get_code());
 		}
-		jit_block = jit_cache.get(pc);
+		jit_block = (jit_block_t)jit_cache.get(pc);
 		cout << *this << endl << endl;
-		jit_block(&state);
+		jit_block(&state, &exit_inf);
 		cout << *this << endl;
+		cout << exit_inf << endl;
+
+		// Handle the vm exit
+		switch (exit_inf.reason){
+			case exit_info::ExitReason::IndirectBranch:
+				break;
+			case exit_info::ExitReason::Syscall:
+				handle_syscall(regs[Reg::v0]);
+				break;
+			case exit_info::ExitReason::Fault:
+				throw exit_inf.fault;
+		}
+		pc = exit_inf.reenter_pc;
+		prev_pc = pc; // not sure about this, we'll see
 		die("done\n");
 	}
 }

@@ -5,6 +5,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "common.h"
 #include "mmu.h"
+#include "fault.h"
 
 enum Reg {
 	zero, at, v0, v1, a0, a1, a2, a3,
@@ -12,6 +13,27 @@ enum Reg {
 	s0,   s1, s2, s3, s4, s5, s6, s7,
 	t8,   t9, k0, k1, gp, sp, fp, ra,
 };
+
+struct jit_state {
+	uint32_t* regs;
+	float*    fpregs;
+	uint8_t*  memory;
+	uint8_t*  perms;
+};
+
+struct exit_info {
+	enum ExitReason: uint32_t {
+		Syscall = 0,
+		Fault,
+		IndirectBranch,
+	};
+	ExitReason   reason;
+	vaddr_t      reenter_pc;
+	struct Fault fault;
+	friend std::ostream& operator<<(std::ostream& os, const exit_info& exit_inf);
+};
+
+typedef void (*jit_block_t)(jit_state*, exit_info*);
 
 class Jitter;
 typedef bool (Jitter::*const inst_handler_jit_t)(vaddr_t, uint32_t);
@@ -31,6 +53,22 @@ class Jitter {
 		llvm::Value* get_reg(uint8_t reg);
 		void set_reg(uint8_t reg, llvm::Value* val);
 		void set_reg(uint8_t reg, uint32_t val);
+
+		llvm::Value* get_pmemory(llvm::Value* addr);
+
+		void generate_fault(llvm::Value* fault_type, llvm::Value* addr);
+
+		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm);
+
+		void check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm);
+
+		void check_alignment_mem(llvm::Value* addr, uint8_t perm);
+
+		// Reads a value from memory. Checks bounds, perms and alignment
+		llvm::Value* read_mem(llvm::Value* addr, vsize_t len);
+
+		// Writes a value to memory. Checks bounds, perms and alignment
+		void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len);
 
 		llvm::BasicBlock* create_block(vaddr_t pc);
 		bool handle_inst(vaddr_t pc);

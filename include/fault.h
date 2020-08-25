@@ -6,8 +6,8 @@
 
 // Fault: everything that will end the execution abruptly and will be considered
 // a crash
-struct Fault : public std::exception {
-	enum Type {
+struct Fault: public std::exception {
+	enum Type: uint32_t {
 		Read,
 		Write,
 		Exec,
@@ -23,6 +23,7 @@ struct Fault : public std::exception {
 	Fault::Type type;
 	vaddr_t     fault_addr;
 
+	Fault(){}
 	Fault(Fault::Type type, vaddr_t fault_addr):
 		type(type), fault_addr(fault_addr) {}
 	std::string type_str() const;
@@ -54,7 +55,7 @@ inline std::string Fault::type_str() const {
 		case Fault::Type::MisalignedExec:
 			return "MisalignedExec";
 		default:
-			return "UnimplementedFault";
+			return "Unimplemented (" + std::to_string(type) + ")";
 	}
 }
 

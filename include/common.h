@@ -30,14 +30,6 @@ struct cov_t {
 	}
 };
 
-// JIT stuff
-struct jit_state {
-	uint32_t* regs;
-	float*    fpregs;
-	uint8_t*  memory;
-};
-
-typedef void (*jit_block_t)(jit_state*);
 
 #if DEBUG == 1
 #define dbgprintf(...) printf(__VA_ARGS__)

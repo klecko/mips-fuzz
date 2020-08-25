@@ -69,6 +69,10 @@ uint8_t* Mmu::get_memory(){
 	return memory;
 }
 
+uint8_t* Mmu::get_perms(){
+	return perms;
+}
+
 vsize_t Mmu::size() const {
 	return memory_len;
 }

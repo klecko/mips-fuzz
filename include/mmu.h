@@ -87,6 +87,8 @@ class Mmu {
 
 		uint8_t* get_memory();
 
+		uint8_t* get_perms();
+
 		vsize_t size() const;
 
 		// Get current brk. Attempt to set new brk, performing size checks

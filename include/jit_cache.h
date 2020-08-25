@@ -11,7 +11,7 @@ class JitCache {
 		uint8_t* mem;
 		size_t size;
 		size_t max_size;
-		std::unordered_map<vaddr_t, jit_block_t> cache;
+		std::unordered_map<vaddr_t, void*> cache;
 		std::atomic_flag lock;
 
 	public:
@@ -35,7 +35,7 @@ class JitCache {
 
 			// Copy code, add its address to the map and update size
 			memcpy(mem + size, code.c_str(), code.size());
-			cache[pc] = (jit_block_t)(mem + size);
+			cache[pc] = mem + size;
 			size += code.size();
 
 			lock.clear();
@@ -45,7 +45,7 @@ class JitCache {
 			return cache.count(pc);
 		}
 
-		jit_block_t get(vaddr_t pc){
+		void* get(vaddr_t pc){
 			return cache.at(pc);
 		}
 };
