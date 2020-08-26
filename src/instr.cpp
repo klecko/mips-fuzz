@@ -948,7 +948,7 @@ void Emulator::inst_mthc1(uint32_t val){
 
 void Emulator::inst_c_cond_s(uint32_t val){
 	inst_F_t inst(val);
-	uint8_t cond = inst.funct & 0b001111;
+	//uint8_t cond = inst.funct & 0b001111;
 	die("Unimplemented c.cond.s at 0x%X\n", prev_pc);
 }
 
@@ -990,7 +990,7 @@ void Emulator::inst_cfc1(uint32_t val){
 			// Set CCs
 			value |= (ccs.test(0) << 23);
 			for (int i = 1; i < 8; i++)
-				value |= (ccs.test(i) << 24+i);
+				value |= (ccs.test(i) << (24+i));
 			break;
 
 		default:

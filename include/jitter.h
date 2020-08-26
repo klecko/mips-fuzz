@@ -62,12 +62,6 @@ class Jitter {
 
 		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		                llvm::Value* info1=NULL, llvm::Value* info2=NULL);
-		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-		                 uint32_t info1, llvm::Value* info2);
-		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-		                 llvm::Value* info1, uint32_t info2);
-		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-		                 uint32_t info1, uint32_t info2);
 
 		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 		                      vaddr_t pc);

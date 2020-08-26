@@ -170,7 +170,7 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const {
 			else if (perm == PERM_EXEC)
 				throw Fault(Fault::Type::Exec, addr);
 			else if (perms[addr] & PERM_READ)
-				0;
+				{}
 				//throw Fault(Fault::Type::Uninit, addr);
 			else if (!(perms[addr] & PERM_READ))
 				throw Fault(Fault::Type::Read, addr);

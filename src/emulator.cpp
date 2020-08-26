@@ -164,12 +164,12 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	// unrelated.
 	phinfo_t phinfo = elf.get_phinfo();
 	Elf32_auxv_t auxv[] = {
-		{AT_RANDOM, random_bytes},               // Address of 16 random bytes
-		{AT_EXECFN, argv_vm[0]},                 // Filename of the program
-	 	{AT_PHDR,   load_addr + phinfo.e_phoff}, // Pointer to program headers
-		{AT_PHENT,  phinfo.e_phentsize},         // Size of each entry
-		{AT_PHNUM,  phinfo.e_phnum},             // Number of entries
-		{AT_NULL,   0},                          // Auxv end
+		{AT_RANDOM, {random_bytes}},               // Address of 16 random bytes
+		{AT_EXECFN, {argv_vm[0]}},                 // Filename of the program
+		{AT_PHDR,   {load_addr + phinfo.e_phoff}}, // Pointer to program headers
+		{AT_PHENT,  {phinfo.e_phentsize}},         // Size of each entry
+		{AT_PHNUM,  {phinfo.e_phnum}},             // Number of entries
+		{AT_NULL,   {0}},                          // Auxv end
 	};
 	// We don't use push_stack or mmu.write because of misalignment checks.
 	regs[Reg::sp] -= sizeof(auxv);
@@ -212,7 +212,7 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 	if (it == symbols.end())
 		die("Not found symbol %s\n", symbol_name.c_str());
 	set_bp_addr(it->symbol_value, bp);
-	dbgprintf("set breakpoint %s at 0x%X\n", symbol_name.c_str(), it->symbol_value);
+	dbgprintf("set breakpoint %s at 0x%lX\n", symbol_name.c_str(), it->symbol_value);
 }
 
 void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
@@ -480,7 +480,7 @@ uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
 		die("sys_writev trying to write to fd %d\n", fd);
 
 	// Return value
-	uint32_t bytes_written;
+	uint32_t bytes_written = 0;
 
 	// Read iovec structs from guest memory
 	guest_iovec iov[iovcnt];
@@ -657,7 +657,6 @@ uint32_t Emulator::sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
 uint32_t Emulator::sys_stat64(vaddr_t pathname_addr, vaddr_t statbuf_addr,
                               uint32_t& error)
 {
-	uint32_t ret;
 	string pathname = mmu.read_string(pathname_addr);
 	if (pathname == "input_file"){
 		struct guest_stat64 s;
@@ -699,7 +698,6 @@ uint32_t Emulator::sys_llseek(uint32_t fd, uint32_t offset_hi,
 
 	// Perform action
 	int64_t offset = (((uint64_t)offset_hi)<<32) | offset_lo;
-	int64_t result;
 	switch (whence){
 		case SEEK_SET:
 			f.set_offset(offset);

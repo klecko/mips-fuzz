@@ -24,7 +24,7 @@ Corpus::Corpus(int nthreads, const string& path){
 	struct dirent* ent;
 	struct stat st;
 	string filepath;
-	while (ent = readdir(dir)){
+	while ((ent = readdir(dir))){
 		filepath = path + "/" + ent->d_name;
 
 		// Check file type. If readdir fails to provide it, fallback

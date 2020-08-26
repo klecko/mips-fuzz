@@ -966,6 +966,7 @@ bool Jitter::inst_bshfl(vaddr_t pc, uint32_t val){
 		default:
 			die("Unimplemented bshfl instruction at 0x%X: 0x%X\n", pc-4, val);
 	}
+	return false;
 }
 
 bool Jitter::inst_seh(vaddr_t pc, uint32_t val){
@@ -1208,9 +1209,9 @@ bool Jitter::inst_mtlo(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_ext(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
+	uint32_t size = inst.d + 1;
 	llvm::Value* lsb  = llvm::ConstantInt::get(int32_ty, inst.S);
-	llvm::Value* size = llvm::ConstantInt::get(int32_ty, inst.d + 1);
-	llvm::Value* mask = llvm::ConstantInt::get(int32_ty, (1 << (inst.d+1)) - 1);
+	llvm::Value* mask = llvm::ConstantInt::get(int32_ty, (1 << size) - 1);
 	set_reg(inst.t, 
 	        builder.CreateAnd(builder.CreateLShr(get_reg(inst.s), lsb), mask));
 	return false;
@@ -1218,9 +1219,9 @@ bool Jitter::inst_ext(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_ins(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
+	uint32_t size = inst.d - inst.S + 1;
 	llvm::Value* lsb  = llvm::ConstantInt::get(int32_ty, inst.S);
-	llvm::Value* size = llvm::ConstantInt::get(int32_ty, inst.d - inst.S + 1);
-	llvm::Value* mask = llvm::ConstantInt::get(int32_ty, (1 << (inst.d-inst.S+1))-1);
+	llvm::Value* mask = llvm::ConstantInt::get(int32_ty, (1 << size)-1);
 	
 	// Get bits to insert, place them at the correct position
 	llvm::Value* ins  = builder.CreateAnd(get_reg(inst.s), mask);

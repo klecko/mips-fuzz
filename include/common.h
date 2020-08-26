@@ -43,10 +43,9 @@ struct cov_t {
 #define guestprintf(...) ((void)0)
 #endif
 
-template <class... Args>
-void die(const char* fmt, Args... args){
-	fprintf(stderr, fmt, args...);
-	exit(EXIT_FAILURE);
-}
+#define die(...) do { \
+	fprintf(stderr, __VA_ARGS__); \
+	exit(EXIT_FAILURE);           \
+} while(0)
 
 #endif

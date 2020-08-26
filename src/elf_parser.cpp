@@ -364,7 +364,7 @@ std::string Elf_parser::get_rel_symbol_name(
 
     std::string sym_name;
     for(auto &sym: syms) {
-        if(sym.symbol_num == ELF64_R_SYM(sym_idx)) {
+        if(sym.symbol_num == ELF_R_SYM(sym_idx)) {
             sym_name = sym.symbol_name;
             break;
         }
