@@ -12,6 +12,7 @@ enum Reg {
 	t0,   t1, t2, t3, t4, t5, t6, t7,
 	s0,   s1, s2, s3, s4, s5, s6, s7,
 	t8,   t9, k0, k1, gp, sp, fp, ra,
+	hi,   lo,
 };
 
 struct jit_state {
@@ -26,6 +27,8 @@ struct exit_info {
 		Syscall = 0,
 		Fault,
 		IndirectBranch,
+		Rdhwr,
+		Exception, // trap or breakpoint
 	};
 	ExitReason   reason;
 	vaddr_t      reenter_pc;
@@ -56,21 +59,25 @@ class Jitter {
 
 		llvm::Value* get_pmemory(llvm::Value* addr);
 
-		void generate_indirect_branch(llvm::Value* reenter_pc);
+		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
+		                 Fault::Type fault_type=Fault::Type::NoFault, 
+		                 llvm::Value* fault_addr=0);
 
-		void generate_fault(llvm::Value* fault_type, llvm::Value* addr);
+		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
+		                      vaddr_t pc);
 
-		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm);
+		void check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
+		                     vaddr_t pc);
 
-		void check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm);
-
-		void check_alignment_mem(llvm::Value* addr, uint8_t perm);
+		void check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm, 
+		                         vaddr_t pc);
 
 		// Reads a value from memory. Checks bounds, perms and alignment
-		llvm::Value* read_mem(llvm::Value* addr, vsize_t len);
+		llvm::Value* read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc);
 
 		// Writes a value to memory. Checks bounds, perms and alignment
-		void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len);
+		void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
+		               vaddr_t pc);
 
 		llvm::BasicBlock* create_block(vaddr_t pc);
 		bool handle_inst(vaddr_t pc);
@@ -164,6 +171,7 @@ class Jitter {
 		bool inst_mthi(vaddr_t, uint32_t);
 		bool inst_mtlo(vaddr_t, uint32_t);
 		bool inst_ext(vaddr_t, uint32_t);
+		bool inst_ins(vaddr_t, uint32_t);
 		bool inst_sra(vaddr_t, uint32_t);
 		bool inst_clz(vaddr_t, uint32_t);
 		bool inst_lwc1(vaddr_t, uint32_t);
@@ -183,7 +191,7 @@ class Jitter {
 		bool inst_c_cond_d(vaddr_t, uint32_t);
 		bool inst_bc1(vaddr_t, uint32_t);
 		bool inst_cfc1(vaddr_t, uint32_t);
-		bool inst_ins(vaddr_t, uint32_t);
+		bool inst_break(vaddr_t, uint32_t);
 };
 
 

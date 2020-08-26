@@ -31,7 +31,7 @@ class Emulator {
 		// Memory
 		Mmu mmu;
 
-		// Registers
+		// Registers. JIT assumes `hi` and `lo` are just after `regs`
 		uint32_t  regs[32];
 		uint32_t  hi, lo;
 		vaddr_t   pc;
@@ -272,6 +272,7 @@ class Emulator {
 		void inst_c_cond_d(uint32_t);
 		void inst_bc1(uint32_t);
 		void inst_cfc1(uint32_t);
+		void inst_break(uint32_t);
 };
 
 template<class T>

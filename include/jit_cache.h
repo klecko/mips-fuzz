@@ -31,7 +31,7 @@ class JitCache {
 
 			// Test OOM
 			if (size + code.size() > max_size)
-				die("OOM jit\n");
+				die("OOM jit cache\n");
 
 			// Copy code, add its address to the map and update size
 			memcpy(mem + size, code.c_str(), code.size());

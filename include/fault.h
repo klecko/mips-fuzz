@@ -18,6 +18,7 @@ struct Fault: public std::exception {
 		MisalignedRead,
 		MisalignedWrite,
 		MisalignedExec,
+		NoFault = 0xFFFFFFFF
 	};
 
 	Fault::Type type;

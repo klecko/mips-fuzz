@@ -318,9 +318,10 @@ void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
 			jit_cache.add(pc, jitter.get_code());
 		}
 		jit_block = (jit_block_t)jit_cache.get(pc);
-		cout << *this << endl << endl;
+		printf("Running 0x%X\n", pc);
+		//cout << *this << endl << endl;
 		jit_block(&state, &exit_inf);
-		cout << *this << endl;
+		//cout << *this << endl;
 		cout << exit_inf << endl;
 
 		// Handle the vm exit
@@ -332,6 +333,10 @@ void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
 				break;
 			case exit_info::ExitReason::Fault:
 				throw exit_inf.fault;
+			case exit_info::Exception:
+				die("Exception??\n");
+			default:
+				die("Unknown exit reason: %d\n", exit_inf.reason);
 		}
 		pc = exit_inf.reenter_pc;
 		prev_pc = pc; // not sure about this, we'll see
@@ -714,7 +719,6 @@ uint32_t Emulator::sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& er
 }
 
 void Emulator::handle_syscall(uint32_t syscall){
-	die("sys: %d\n", syscall);
 	switch (syscall){
 		case 4001: // exit
 		case 4246: // exit_group

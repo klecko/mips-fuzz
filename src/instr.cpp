@@ -1010,3 +1010,7 @@ void Emulator::inst_cfc1(uint32_t val){
 	}
 	set_reg(inst.t, value);
 }
+
+void Emulator::inst_break(uint32_t val){
+	die("Break?\n");
+}

@@ -132,11 +132,11 @@ int main(){
 	// Create shared objects
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
-	JitCache jit_cache(8*1024);
+	JitCache jit_cache(8*1024*1024);
 	Emulator emu(
 		8 * 1024 * 1024,                // memory
-		"../test_bins/readelf",         // path to elf
-		{"readelf", "-l", "input_file"} // argv
+		"../test_bins/test/test",       // path to elf
+		{"test", "input_file"}          // argv
 	);
 
 	// Run until open before forking
