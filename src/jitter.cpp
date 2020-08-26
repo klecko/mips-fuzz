@@ -14,6 +14,8 @@
 using namespace std;
 
 llvm::Type* void_ty;
+llvm::Type* int8_ty;
+llvm::Type* int16_ty;
 llvm::Type* int32_ty;
 llvm::Type* int64_ty;
 llvm::Type* p_int32_ty;
@@ -37,6 +39,8 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 
 	// Get types
 	void_ty      = llvm::Type::getVoidTy(context);
+	int8_ty      = llvm::Type::getInt8Ty(context);
+	int16_ty     = llvm::Type::getInt16Ty(context);
 	int32_ty     = llvm::Type::getInt32Ty(context);
 	int64_ty     = llvm::Type::getInt64Ty(context);
 	p_int32_ty   = llvm::Type::getInt32PtrTy(context);
@@ -53,18 +57,12 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	);
 	llvm::Type* p_jit_state_ty = llvm::PointerType::get(jit_state_ty, 0);
 
-	llvm::Type* fault_ty = llvm::StructType::get(context,
-		{
-			int64_ty, // padding, std::exception stuff
-			int32_ty, // type
-			int32_ty, // fault_addr
-		}
-	);
 	llvm::Type* exit_info_ty = llvm::StructType::get(context,
 		{
 			int32_ty, // reason
 			int32_ty, // pc
-			fault_ty, // fault
+			int32_ty, // info1
+			int32_ty, // info2
 		}
 	);
 	llvm::Type* p_exit_info_ty = llvm::PointerType::get(exit_info_ty, 0);
@@ -206,7 +204,7 @@ llvm::Type* get_int_ptr_ty(vsize_t sz, llvm::LLVMContext& context){
 }
 
 void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-                         Fault::Type fault_type, llvm::Value* fault_addr)
+                         llvm::Value* info1, llvm::Value* info2)
 {
 	llvm::Value* p_exit_info = &function->arg_begin()[1];
 	llvm::Value* p_exit_reason = builder.CreateInBoundsGEP(
@@ -225,32 +223,26 @@ void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		},
 		"p_pc"
 	);
+	llvm::Value* p_info1 = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 2),
+		},
+		"p_info1_"
+	);
+	llvm::Value* p_info2 = builder.CreateInBoundsGEP(
+		p_exit_info,
+		{
+			llvm::ConstantInt::get(int32_ty, 0),
+			llvm::ConstantInt::get(int32_ty, 3),
+		},
+		"p_info2_"
+	);
 	builder.CreateStore(llvm::ConstantInt::get(int32_ty, reason), p_exit_reason);
 	builder.CreateStore(reenter_pc, p_pc);
-
-	if (fault_type != Fault::Type::NoFault){
-		llvm::Value* p_fault_type = builder.CreateInBoundsGEP(
-			p_exit_info,
-			{
-				llvm::ConstantInt::get(int32_ty, 0),
-				llvm::ConstantInt::get(int32_ty, 2),
-				llvm::ConstantInt::get(int32_ty, 1), // 0 is padding
-			},
-			"p_fault_type"
-		);
-		llvm::Value* p_fault_addr = builder.CreateInBoundsGEP(
-			p_exit_info,
-			{
-				llvm::ConstantInt::get(int32_ty, 0),
-				llvm::ConstantInt::get(int32_ty, 2),
-				llvm::ConstantInt::get(int32_ty, 2), // 0 is padding
-			},
-			"p_fault_addr"
-		);
-		builder.CreateStore(llvm::ConstantInt::get(int32_ty, fault_type), p_fault_type);
-		builder.CreateStore(fault_addr, p_fault_addr);
-	}
-
+	builder.CreateStore(info1 ? info1 : llvm::ConstantInt::get(int32_ty, 0), p_info1);
+	builder.CreateStore(info2 ? info2 : llvm::ConstantInt::get(int32_ty, 0), p_info2);
 	builder.CreateRetVoid();
 }
 
@@ -292,7 +284,7 @@ void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	gen_vm_exit(
 		exit_info::ExitReason::Fault,
 		llvm::ConstantInt::get(int32_ty, pc-4),
-		fault_type,
+		llvm::ConstantInt::get(int32_ty, fault_type),
 		addr
 	);
 
@@ -364,7 +356,7 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	gen_vm_exit(
 		exit_info::ExitReason::Fault,
 		llvm::ConstantInt::get(int32_ty, pc-4),
-		fault_type,
+		llvm::ConstantInt::get(int32_ty, fault_type),
 		addr
 	);
 
@@ -414,7 +406,7 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	gen_vm_exit(
 		exit_info::ExitReason::Fault,
 		llvm::ConstantInt::get(int32_ty, pc-4),
-		fault_type,
+		llvm::ConstantInt::get(int32_ty, fault_type),
 		addr
 	);
 
@@ -858,11 +850,15 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_rdhwr(vaddr_t pc, uint32_t val){
-	/*llvm::Value* reenter_pc = llvm::ConstantInt::get(int32_ty, pc);
-	gen_vm_exit(exit_info::ExitReason::Rdhwr, reenter_pc);*/
 	inst_R_t inst(val);
-	set_reg(inst.t, 0u);
-	return false;
+	llvm::Value* reenter_pc = llvm::ConstantInt::get(int32_ty, pc);
+	gen_vm_exit(
+		exit_info::ExitReason::Rdhwr,
+		reenter_pc, 
+		llvm::ConstantInt::get(int32_ty, inst.d), 
+		llvm::ConstantInt::get(int32_ty, inst.t)
+	);
+	return true;
 }
 
 bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
@@ -957,23 +953,53 @@ bool Jitter::inst_nor(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_bshfl(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	switch ((val >> 6) & 0b11111){
+		case 0b00010: // wsbh
+			return inst_wsbh(pc, val);
+			break;
+		case 0b10000: // seb
+			return inst_seb(pc, val);
+			break;
+		case 0b11000: // seh
+			return inst_seh(pc, val);
+			break;
+		default:
+			die("Unimplemented bshfl instruction at 0x%X: 0x%X\n", pc-4, val);
+	}
 }
 
 bool Jitter::inst_seh(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_R_t inst(val);
+	llvm::Value* reg = get_reg(inst.t);
+	set_reg(inst.d, 
+	        builder.CreateSExt(builder.CreateTrunc(reg, int16_ty), int32_ty));
+	return false;
 }
 
 bool Jitter::inst_seb(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_R_t inst(val);
+	llvm::Value* reg = get_reg(inst.t);
+	set_reg(inst.d, 
+	        builder.CreateSExt(builder.CreateTrunc(reg, int8_ty), int32_ty));
+	return false;
 }
 
 bool Jitter::inst_wsbh(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_R_t inst(val);
+	llvm::Value* v     = get_reg(inst.t);
+	llvm::Value* int8  = llvm::ConstantInt::get(int32_ty, 8);
+	llvm::Value* mask1 = llvm::ConstantInt::get(int32_ty, 0xFF000000);
+	llvm::Value* mask2 = llvm::ConstantInt::get(int32_ty, 0x00FF0000);
+	llvm::Value* mask3 = llvm::ConstantInt::get(int32_ty, 0x0000FF00);
+	llvm::Value* mask4 = llvm::ConstantInt::get(int32_ty, 0x000000FF);
+	llvm::Value* res = builder.CreateOr({
+		builder.CreateLShr(builder.CreateAnd(v, mask1), int8),
+		builder.CreateShl (builder.CreateAnd(v, mask2), int8),
+		builder.CreateLShr(builder.CreateAnd(v, mask3), int8),
+		builder.CreateShl (builder.CreateAnd(v, mask4), int8)
+	});
+	set_reg(inst.d, res);
+	return false;
 }
 
 bool Jitter::inst_srl(vaddr_t pc, uint32_t val){
@@ -1232,12 +1258,12 @@ bool Jitter::inst_swc1(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_ldc1(vaddr_t pc, uint32_t val){
 	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	return false;
 }
 
 bool Jitter::inst_sdc1(vaddr_t pc, uint32_t val){
 	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	return false;
 }
 
 bool Jitter::inst_fmt_s(vaddr_t pc, uint32_t val){
@@ -1308,7 +1334,7 @@ bool Jitter::inst_cfc1(vaddr_t pc, uint32_t val){
 bool Jitter::inst_break(vaddr_t pc, uint32_t val){
 	llvm::Value* reenter_pc = llvm::ConstantInt::get(int32_ty, pc);
 	gen_vm_exit(exit_info::ExitReason::Exception, reenter_pc);
-	return false;
+	return true;
 }
 
 // Instruction handlers indexed by opcode
@@ -1655,13 +1681,13 @@ const inst_handler_jit_t Jitter::inst_handlers_COP1[] = {
 };
 
 const char* exit_reason_map[] = {
-	"syscall", "fault", "indirect branch",
+	"syscall", "fault", "indirect branch", "rdhwr", "exception",
 };
 ostream& operator<<(ostream& os, const exit_info& exit_inf){
 	assert(exit_inf.reason < sizeof(exit_reason_map)/sizeof(const char*));
 	os << "Exit reason: " << exit_reason_map[exit_inf.reason]
 	   << "; reenter pc: 0x" << hex << exit_inf.reenter_pc;
 	if (exit_inf.reason == exit_info::ExitReason::Fault)
-		os << "; Fault: " << exit_inf.fault;
+		os << "; Fault: " << Fault((Fault::Type)exit_inf.info1, exit_inf.info2);
 	return os;
 }

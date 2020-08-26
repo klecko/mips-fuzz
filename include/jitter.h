@@ -30,9 +30,10 @@ struct exit_info {
 		Rdhwr,
 		Exception, // trap or breakpoint
 	};
-	ExitReason   reason;
-	vaddr_t      reenter_pc;
-	struct Fault fault;
+	ExitReason reason;
+	vaddr_t    reenter_pc;
+	uint32_t   info1;
+	uint32_t   info2;
 	friend std::ostream& operator<<(std::ostream& os, const exit_info& exit_inf);
 };
 
@@ -60,8 +61,13 @@ class Jitter {
 		llvm::Value* get_pmemory(llvm::Value* addr);
 
 		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-		                 Fault::Type fault_type=Fault::Type::NoFault, 
-		                 llvm::Value* fault_addr=0);
+		                llvm::Value* info1=NULL, llvm::Value* info2=NULL);
+		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
+		                 uint32_t info1, llvm::Value* info2);
+		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
+		                 llvm::Value* info1, uint32_t info2);
+		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
+		                 uint32_t info1, uint32_t info2);
 
 		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 		                      vaddr_t pc);

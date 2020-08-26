@@ -127,6 +127,8 @@ class Emulator {
 
 		void handle_syscall(uint32_t syscall);
 
+		void handle_rdhwr(uint8_t hwr, uint8_t reg);
+
 		void run_inst(cov_t& cov, Stats& local_stats);
 
 

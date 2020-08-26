@@ -551,19 +551,7 @@ void Emulator::inst_blez(uint32_t val){
 
 void Emulator::inst_rdhwr(uint32_t val){
 	inst_R_t inst(val);
-	uint32_t hwr = 0;
-	switch (inst.d){
-		case 29: // 0b11101, User Local Register
-			if (!tls)
-				die("not set tls\n");
-			hwr = tls;
-			break;
-
-		default:
-			die("Unimplemented rdhwr at 0x%X: %d\n", prev_pc, inst.d);
-	}
-	
-	set_reg(inst.t, hwr);
+	handle_rdhwr(inst.d, inst.t);
 }
 
 void Emulator::inst_bgez(uint32_t val){
@@ -648,8 +636,8 @@ void Emulator::inst_seb(uint32_t val){
 void Emulator::inst_wsbh(uint32_t val){
 	inst_R_t inst(val);
 	uint32_t value = get_reg(inst.t);
-	value = ((value >> 16) & 0xFF) || ((value >> 24) & 0xFF) ||
-	        ((value >> 0)  & 0xFF) || ((value >> 8)  & 0xFF);
+	value = ((value & 0xFF000000) >> 8) | ((value & 0x00FF0000) << 8) |
+	        ((value & 0x0000FF00) >> 8) | ((value & 0x000000FF) << 8);
 	set_reg(inst.d, value);
 }
 

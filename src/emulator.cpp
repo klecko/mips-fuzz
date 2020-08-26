@@ -292,6 +292,22 @@ void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 	}
 }
 
+void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
+	uint32_t result = 0;
+	switch (hwr){
+		case 29: // 0b11101, User Local Register
+			if (!tls)
+				printf("WARNING reading not set tls\n");
+			result = tls;
+			break;
+
+		default:
+			die("Unimplemented rdhwr at 0x%X: %d\n", prev_pc, hwr);
+	}
+	
+	set_reg(reg, result);
+}
+
 void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
                        Stats& local_stats)
 {
@@ -332,9 +348,12 @@ void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
 				handle_syscall(regs[Reg::v0]);
 				break;
 			case exit_info::ExitReason::Fault:
-				throw exit_inf.fault;
+				throw Fault((Fault::Type)exit_inf.info1, exit_inf.info2);
 			case exit_info::Exception:
 				die("Exception??\n");
+			case exit_info::ExitReason::Rdhwr:
+				handle_rdhwr(exit_inf.info1, exit_inf.info2);
+				break;
 			default:
 				die("Unknown exit reason: %d\n", exit_inf.reason);
 		}

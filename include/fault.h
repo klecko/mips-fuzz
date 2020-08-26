@@ -24,7 +24,6 @@ struct Fault: public std::exception {
 	Fault::Type type;
 	vaddr_t     fault_addr;
 
-	Fault(){}
 	Fault(Fault::Type type, vaddr_t fault_addr):
 		type(type), fault_addr(fault_addr) {}
 	std::string type_str() const;
