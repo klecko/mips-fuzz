@@ -37,7 +37,8 @@ struct exit_info {
 	friend std::ostream& operator<<(std::ostream& os, const exit_info& exit_inf);
 };
 
-typedef void (*jit_block_t)(jit_state*, exit_info*);
+typedef void (*jit_block_t)(jit_state*, exit_info*, uint32_t*, uint32_t arr[][35]);
+typedef std::unordered_map<vaddr_t, jit_block_t> jit_cache_t;
 
 class Jitter;
 typedef bool (Jitter::*const inst_handler_jit_t)(vaddr_t, uint32_t);
@@ -46,12 +47,14 @@ class Jitter {
 	private:
 		const Mmu& mmu;
 
-		llvm::LLVMContext context;
-		llvm::Module      module;
-		llvm::IRBuilder<> builder;
-		llvm::Function*   function;
+		std::unique_ptr<llvm::LLVMContext> p_context;
+		std::unique_ptr<llvm::Module>      p_module;
+		llvm::LLVMContext& context;
+		llvm::Module&      module;
+		llvm::IRBuilder<>  builder;
+		llvm::Function*    function;
 		std::unordered_map<vaddr_t, llvm::BasicBlock*> basic_blocks;
-		std::string       code;
+		jit_block_t        result;
 
 		llvm::Value* get_preg(uint8_t reg);
 		llvm::Value* get_reg(uint8_t reg);
@@ -81,11 +84,11 @@ class Jitter {
 
 		llvm::BasicBlock* create_block(vaddr_t pc);
 		bool handle_inst(vaddr_t pc);
-		std::string compile(llvm::Module& module);
+		void compile();
 
 	public:
 		Jitter(vaddr_t pc, const Mmu& mmu);
-		std::string get_code();
+		jit_block_t get_result();
 
 	private: // Instruction handlers
 		static const inst_handler_jit_t inst_handlers[];

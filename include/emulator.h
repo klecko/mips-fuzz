@@ -162,7 +162,7 @@ class Emulator {
 		// Perform run with provided input. May throw Fault or RunTimeout
 		void run(const std::string& input, cov_t& cov, Stats& local_stats);
 
-		void run_jit(const std::string& input, cov_t& cov, JitCache& jit_cache,
+		void run_jit(const std::string& input, cov_t& cov, jit_cache_t& jit_cache,
 		             Stats& local_stats);
 
 		// Run emulator until given address, return the number of instructions

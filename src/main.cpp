@@ -55,7 +55,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 }
 
 void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
-            JitCache& jit_cache, Stats& stats)
+            jit_cache_t& jit_cache, Stats& stats)
 {
 	Rng rng;
 	cycle_t cycles_init, cycles;
@@ -132,7 +132,7 @@ int main(){
 	// Create shared objects
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
-	JitCache jit_cache(8*1024*1024);
+	jit_cache_t jit_cache;
 	Emulator emu(
 		8 * 1024 * 1024,                // memory
 		"../test_bins/test/test",       // path to elf

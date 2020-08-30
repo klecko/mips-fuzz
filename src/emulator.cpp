@@ -308,7 +308,18 @@ void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
 	set_reg(reg, result);
 }
 
-void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
+const char* regs_map[] = {
+	"00",  "at", "v0", "v1",
+	"a0", "a1", "a2", "a3",
+	"t0", "t1", "t2", "t3",
+	"t4", "t5", "t6", "t7",
+	"s0", "s1", "s2", "s3",
+	"s4", "s5", "s6", "s7",
+	"t8", "t9", "k0", "k1",
+	"gp", "sp", "fp", "ra",
+	"hi", "lo"
+};
+void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
                        Stats& local_stats)
 {
 	// Save provided input. Internal representation is as const char* and not
@@ -322,21 +333,22 @@ void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
 		mmu.get_memory(),
 		mmu.get_perms(),
 	};
-
 	exit_info exit_inf;
+	uint32_t num_inst = 0;
+	uint32_t regs_state[2000][35] = {{0}};
 
 	running = true;
 	jit_block_t jit_block;
 	while (running){
+		num_inst = 0;
+		memset(regs_state, 0, sizeof(regs_state));
 		// Get the JIT block and run it
-		if (!jit_cache.is_cached(pc)){
-			Jitter jitter(pc, mmu);
-			jit_cache.add(pc, jitter.get_code());
-		}
-		jit_block = (jit_block_t)jit_cache.get(pc);
+		if (!jit_cache.count(pc))
+			jit_cache[pc] = Jitter(pc, mmu).get_result();
+		jit_block = jit_cache[pc];
 		printf("Running 0x%X\n", pc);
 		//cout << *this << endl << endl;
-		jit_block(&state, &exit_inf);
+		jit_block(&state, &exit_inf, &num_inst, regs_state);
 		//cout << *this << endl;
 		cout << exit_inf << endl;
 
@@ -359,6 +371,20 @@ void Emulator::run_jit(const string& input, cov_t& cov, JitCache& jit_cache,
 		}
 		pc = exit_inf.reenter_pc;
 		prev_pc = pc; // not sure about this, we'll see
+		/* 
+		// DUMP
+		for (int h = 0; h < num_inst; h++){
+			cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
+			cout << "PC:  " << setw(8) << regs_state[h][34] << endl;
+			for (int i = 0; i < 34; i++){
+				cout << "$" << regs_map[i] << ": " << setw(8) << regs_state[h][i] << "\t";
+				if ((i+1)%8 == 0)
+					cout << endl;
+			}
+			cout << endl << endl;
+		}
+		*/
+
 		//die("done\n");
 	}
 }
@@ -868,16 +894,6 @@ void Emulator::handle_syscall(uint32_t syscall){
 	}
 }
 
-const char* regs_map[] = {
-	"00",  "at", "v0", "v1",
-	"a0", "a1", "a2", "a3",
-	"t0", "t1", "t2", "t3", 
-	"t4", "t5", "t6", "t7", 
-	"s0", "s1", "s2", "s3", 
-	"s4", "s5", "s6", "s7", 
-	"t8", "t9", "k0", "k1", 
-	"gp", "sp", "fp", "ra"
-};
 ostream& operator<<(ostream& os, const Emulator& emu){
 	os << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
 	os << "PC:  " << setw(8) << emu.pc << endl;
