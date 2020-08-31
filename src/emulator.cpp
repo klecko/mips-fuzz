@@ -186,7 +186,7 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	push_stack<uint32_t>(argv.size());
 
 	// Set breakpoints. Do it here because we have access to symbols
-	set_bps(elf.get_symbols());
+	//set_bps(elf.get_symbols());
 }
 
 
@@ -318,6 +318,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		mmu.get_memory(),
 		mmu.get_perms(),
 		mmu.get_dirty_vec(),
+		mmu.get_pdirty_size(),
 		mmu.get_dirty_map(),
 		fpregs,
 		&ccs,
@@ -330,7 +331,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 	jit_block_t jit_block;
 	while (running){
 		num_inst = 0;
-		memset(regs_state, 0, sizeof(regs_state));
+		//memset(regs_state, 0, sizeof(regs_state));
 		// Get the JIT block and run it
 		if (!jit_cache.count(pc))
 			jit_cache[pc] = Jitter(pc, mmu).get_result();
@@ -348,6 +349,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 				handle_syscall(regs[Reg::v0]);
 				break;
 			case exit_info::ExitReason::Fault:
+				pc = prev_pc = exit_inf.reenter_pc;
 				throw Fault((Fault::Type)exit_inf.info1, exit_inf.info2);
 			case exit_info::ExitReason::Exception:
 				die("Exception??\n");

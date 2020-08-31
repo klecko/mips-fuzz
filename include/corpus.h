@@ -50,7 +50,7 @@ typedef std::vector<std::pair<vaddr_t, Fault>> crashes_t;
 
 class Corpus {
 	private:
-		static const int MUTATED_BYTES = 32;
+		static const int MUTATED_BYTES = 2;
 
 		// Corpus and its lock
 		std::vector<std::string> corpus;

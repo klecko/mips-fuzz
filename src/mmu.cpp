@@ -17,6 +17,8 @@ Mmu::Mmu(vsize_t mem_size){
 	brk        = 0;
 	min_brk    = 0;
 	max_brk    = 0;
+	dirty_vec  = new vaddr_t[memory_len/DIRTY_BLOCK_SIZE + 1];
+	dirty_size = 0;
 	dirty_map.resize(memory_len/DIRTY_BLOCK_SIZE + 1, false);
 	memset(memory, 0, mem_size);
 	memset(perms, 0, mem_size);
@@ -31,10 +33,12 @@ Mmu::Mmu(const Mmu& other){
 	brk        = other.brk;
 	min_brk    = other.min_brk;
 	max_brk    = other.max_brk;
-	dirty_vec  = vector<vaddr_t>(other.dirty_vec);
+	dirty_vec  = new vaddr_t[memory_len/DIRTY_BLOCK_SIZE + 1];
+	dirty_size = other.dirty_size;
 	dirty_map  = vector<uint8_t>(other.dirty_map);
 	memcpy(memory, other.memory, memory_len);
 	memcpy(perms, other.perms, memory_len);
+	memcpy(dirty_vec, other.dirty_vec, dirty_size);
 }
 
 Mmu::Mmu(Mmu&& other) noexcept : Mmu(){
@@ -44,6 +48,7 @@ Mmu::Mmu(Mmu&& other) noexcept : Mmu(){
 Mmu::~Mmu(){
 	delete[] memory;
 	delete[] perms;
+	delete[] dirty_vec;
 }
 
 Mmu& Mmu::operator=(Mmu other){
@@ -62,6 +67,7 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.min_brk, second.min_brk);
 	swap(first.max_brk, second.max_brk);
 	swap(first.dirty_vec, second.dirty_vec);
+	swap(first.dirty_size, second.dirty_size);
 	swap(first.dirty_map, second.dirty_map);
 }
 
@@ -74,7 +80,11 @@ uint8_t* Mmu::get_perms(){
 }
 
 vaddr_t* Mmu::get_dirty_vec(){
-	return dirty_vec.data();
+	return dirty_vec;
+}
+
+vsize_t* Mmu::get_pdirty_size(){
+	return &dirty_size;
 }
 
 uint8_t* Mmu::get_dirty_map(){
@@ -146,7 +156,7 @@ void Mmu::set_dirty(vaddr_t addr, vsize_t len){
 	vsize_t block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1;
 	for (vsize_t block = block_begin; block < block_end; block++){
 		if (!dirty_map[block]){
-			dirty_vec.push_back(block);
+			dirty_vec[dirty_size++] = block;
 			dirty_map[block] = true;
 		}
 	}
@@ -290,21 +300,22 @@ vaddr_t Mmu::alloc_stack(vsize_t size){
 Mmu Mmu::fork() const {
 	// Create copy and reset its dirty blocks
 	Mmu new_mmu(*this);
-	new_mmu.dirty_vec.clear();
+	new_mmu.dirty_size = 0;
 	new_mmu.dirty_map.assign(new_mmu.dirty_map.size(), false);
 	return new_mmu;
 }
 
 void Mmu::reset(const Mmu& other){
 	// Reset memory and perms for every dirty block
-	for (vsize_t block : dirty_vec){
+	for (vsize_t i = 0; i < dirty_size; i++){
+		vaddr_t block = dirty_vec[i];
 		vaddr_t addr = block*DIRTY_BLOCK_SIZE;
 		memcpy(memory + addr, other.memory + addr, DIRTY_BLOCK_SIZE);
 		memcpy(perms  + addr, other.perms  + addr, DIRTY_BLOCK_SIZE);
 		dirty_map[block] = false;
 	}
 
-	dirty_vec.clear();
+	dirty_size = 0;
 	next_alloc = other.next_alloc;
 	stack      = other.stack;
 	brk        = other.brk;

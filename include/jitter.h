@@ -20,6 +20,7 @@ struct jit_state {
 	uint8_t*  memory;
 	uint8_t*  perms;
 	vaddr_t*  dirty_vec;
+	vsize_t*  p_dirty_size;
 	uint8_t*  dirty_map;
 	float*    fpregs;
 	uint8_t*  ccs;
@@ -64,6 +65,8 @@ class Jitter {
 		llvm::Value* get_reg(uint8_t reg);
 		void set_reg(uint8_t reg, llvm::Value* val);
 		void set_reg(uint8_t reg, uint32_t val);
+
+		llvm::Value* get_state_field(uint8_t field, const std::string& name);
 
 		llvm::Value* get_pmemory(llvm::Value* addr);
 

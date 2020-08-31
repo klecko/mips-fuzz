@@ -46,7 +46,8 @@ class Mmu {
 		vaddr_t  min_brk, max_brk;
 
 		// Holds the index of every dirty block (addr/DIRTY_BLOCK_SIZE)
-		std::vector<vaddr_t> dirty_vec;
+		vaddr_t* dirty_vec;
+		vsize_t  dirty_size;
 
 		// Map for every block, true if dirty
 		std::vector<uint8_t> dirty_map;
@@ -89,6 +90,8 @@ class Mmu {
 		uint8_t* get_perms();
 
 		vaddr_t* get_dirty_vec();
+
+		vsize_t* get_pdirty_size();
 
 		uint8_t* get_dirty_map();
 

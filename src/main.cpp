@@ -92,7 +92,6 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 				local_stats.timeouts++;
 			}
 			local_stats.run_cycles += rdtsc() - cycles;
-			cout << "END RUN" << endl;
 
 			local_stats.cases++;
 			corpus.report_cov(id, cov);
