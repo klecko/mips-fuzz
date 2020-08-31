@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 #include <cstdlib>
-#include <bitset>
 #include <vector>
 #include "elf_parser.hpp"
 
@@ -47,10 +46,10 @@ class Mmu {
 		vaddr_t  min_brk, max_brk;
 
 		// Holds the index of every dirty block (addr/DIRTY_BLOCK_SIZE)
-		std::vector<vaddr_t> dirty_blocks;
+		std::vector<vaddr_t> dirty_vec;
 
-		// Bitmap for every block, true if dirty
-		std::vector<bool>    dirty_bitmap;
+		// Map for every block, true if dirty
+		std::vector<uint8_t> dirty_map;
 
 		// Checks if range is inside guest memory map, throwing OutOfBounds*
 		// fault if not
@@ -88,6 +87,10 @@ class Mmu {
 		uint8_t* get_memory();
 
 		uint8_t* get_perms();
+
+		vaddr_t* get_dirty_vec();
+
+		uint8_t* get_dirty_map();
 
 		vsize_t size() const;
 

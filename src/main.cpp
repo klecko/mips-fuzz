@@ -92,6 +92,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 				local_stats.timeouts++;
 			}
 			local_stats.run_cycles += rdtsc() - cycles;
+			cout << "END RUN" << endl;
 
 			local_stats.cases++;
 			corpus.report_cov(id, cov);
@@ -112,7 +113,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 }
 
 int main(){
-	const int num_threads = (DEBUG ? 1 : thread::hardware_concurrency());
+	const int num_threads = 1;//(DEBUG ? 1 : thread::hardware_concurrency());
 	cout << "Threads: " << num_threads << endl;
 
 	// Create crash folder

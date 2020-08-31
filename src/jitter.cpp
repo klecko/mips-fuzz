@@ -49,9 +49,12 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	llvm::Type* jit_state_ty = llvm::StructType::get(context,
 		{
 			int32ptr_ty, // regs
-			floatptr_ty, // fpregs
 			int8ptr_ty,  // memory
 			int8ptr_ty,  // perms
+			int32ptr_ty, // dirty_vec
+			int8ptr_ty,  // dirty_map
+			floatptr_ty, // fpregs
+			int8ptr_ty,  // ccs
 		}
 	);
 	llvm::Type* p_jit_state_ty = llvm::PointerType::get(jit_state_ty, 0);
@@ -93,6 +96,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	// JIT module
 	if (llvm::verifyModule(module, &llvm::errs())){
 		llvm::outs() << module;
+		llvm::verifyModule(module, &llvm::errs());
 		die("bad module\n");
 	}
 	compile();
@@ -107,19 +111,9 @@ struct jit_init {
 };
 
 void Jitter::compile(){
-	thread_local jit_init init;
-	llvm::ExitOnError ExitOnErr;
-	ExitOnErr.setBanner("Error compiling JIT: ");
-
-	//llvm::outs() << module;
-
-	thread_local unique_ptr<llvm::orc::LLJIT> jit =
-		ExitOnErr(llvm::orc::LLJITBuilder().create());
-
-	ExitOnErr(jit->addIRModule(llvm::orc::ThreadSafeModule(move(p_module),
-	                                                       move(p_context))));
-	llvm::JITEvaluatedSymbol sym = ExitOnErr(jit->lookup(function->getName()));
-	result = (jit_block_t)sym.getAddress();
+	thread_local jit_init init; // static?
+	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module)).create();
+	result = (jit_block_t)ee->getFunctionAddress(function->getName());
 }
 
 jit_block_t Jitter::get_result(){
@@ -132,15 +126,15 @@ llvm::Value* Jitter::get_preg(uint8_t reg){
 	llvm::Value* pp_regs = builder.CreateInBoundsGEP(
 		state,
 		{
-			llvm::ConstantInt::get(int32_ty, 0), // *state
-			llvm::ConstantInt::get(int32_ty, 0), // state->regs
+			builder.getInt32(0), // *state
+			builder.getInt32(0), // state->regs
 		},
 		"pp_regs"
 	);
 	llvm::Value* p_regs = builder.CreateLoad(pp_regs, "p_regs");
 	llvm::Value* p_reg = builder.CreateInBoundsGEP(
 		p_regs,
-		{ llvm::ConstantInt::get(int32_ty, reg) },
+		builder.getInt32(reg),
 		"p_reg" + to_string(reg) + "_"
 	);
 	return p_reg;
@@ -150,7 +144,7 @@ llvm::Value* Jitter::get_reg(uint8_t reg){
 	assert(0 <= reg && reg <= 33);
 	llvm::Value* reg_val;
 	if (reg == 0)
-		reg_val = llvm::ConstantInt::get(int32_ty, 0);
+		reg_val = builder.getInt32(0);
 	else {
 		llvm::Value* p_reg = get_preg(reg);
 		reg_val = builder.CreateLoad(p_reg, "reg" + to_string(reg) + "_");
@@ -168,7 +162,7 @@ void Jitter::set_reg(uint8_t reg, llvm::Value* val){
 }
 
 void Jitter::set_reg(uint8_t reg, uint32_t val){
-	llvm::Value* v = llvm::ConstantInt::get(int32_ty, val);
+	llvm::Value* v = builder.getInt32(val);
 	set_reg(reg, v);
 }
 
@@ -177,8 +171,8 @@ llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
 	llvm::Value* pp_memory = builder.CreateInBoundsGEP(
 		state,
 		{
-			llvm::ConstantInt::get(int32_ty, 0), // *state
-			llvm::ConstantInt::get(int32_ty, 2), // state->memory
+			builder.getInt32(0), // *state
+			builder.getInt32(1), // state->memory
 		},
 		"pp_memory"
 	);
@@ -198,39 +192,39 @@ void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 	llvm::Value* p_exit_reason = builder.CreateInBoundsGEP(
 		p_exit_info,
 		{
-			llvm::ConstantInt::get(int32_ty, 0),
-			llvm::ConstantInt::get(int32_ty, 0),
+			builder.getInt32(0),
+			builder.getInt32(0),
 		},
 		"p_exit_reason"
 	);
 	llvm::Value* p_pc = builder.CreateInBoundsGEP(
 		p_exit_info,
 		{
-			llvm::ConstantInt::get(int32_ty, 0),
-			llvm::ConstantInt::get(int32_ty, 1),
+			builder.getInt32(0),
+			builder.getInt32(1),
 		},
 		"p_pc"
 	);
 	llvm::Value* p_info1 = builder.CreateInBoundsGEP(
 		p_exit_info,
 		{
-			llvm::ConstantInt::get(int32_ty, 0),
-			llvm::ConstantInt::get(int32_ty, 2),
+			builder.getInt32(0),
+			builder.getInt32(2),
 		},
 		"p_info1_"
 	);
 	llvm::Value* p_info2 = builder.CreateInBoundsGEP(
 		p_exit_info,
 		{
-			llvm::ConstantInt::get(int32_ty, 0),
-			llvm::ConstantInt::get(int32_ty, 3),
+			builder.getInt32(0),
+			builder.getInt32(3),
 		},
 		"p_info2_"
 	);
-	builder.CreateStore(llvm::ConstantInt::get(int32_ty, reason), p_exit_reason);
+	builder.CreateStore(builder.getInt32(reason), p_exit_reason);
 	builder.CreateStore(reenter_pc, p_pc);
-	builder.CreateStore(info1 ? info1 : llvm::ConstantInt::get(int32_ty, 0), p_info1);
-	builder.CreateStore(info2 ? info2 : llvm::ConstantInt::get(int32_ty, 0), p_info2);
+	builder.CreateStore(info1 ? info1 : builder.getInt32(0), p_info1);
+	builder.CreateStore(info2 ? info2 : builder.getInt32(0), p_info2);
 	builder.CreateRetVoid();
 }
 
@@ -258,10 +252,10 @@ void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 		llvm::BasicBlock::Create(context, "fault_bounds", function);
 	llvm::BasicBlock* nofault_path =
 		llvm::BasicBlock::Create(context, "nofault_bounds", function);
-	llvm::Value* memsize = llvm::ConstantInt::get(int32_ty, mmu.size());
+	llvm::Value* memsize = builder.getInt32(mmu.size());
 	llvm::Value* last_addr = builder.CreateAdd(
 		addr,
-		llvm::ConstantInt::get(int32_ty, len),
+		builder.getInt32(len),
 		"last_addr"
 	);
 	llvm::Value* cmp = builder.CreateICmpUGT(last_addr, memsize, "cmp_bounds");
@@ -271,8 +265,8 @@ void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	builder.SetInsertPoint(fault_path);
 	gen_vm_exit(
 		exit_info::ExitReason::Fault,
-		llvm::ConstantInt::get(int32_ty, pc-4),
-		llvm::ConstantInt::get(int32_ty, fault_type),
+		builder.getInt32(pc-4),
+		builder.getInt32(fault_type),
 		addr
 	);
 
@@ -319,8 +313,8 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	llvm::Value* pp_perms = builder.CreateInBoundsGEP(
 		state,
 		{
-			llvm::ConstantInt::get(int32_ty, 0), // *state
-			llvm::ConstantInt::get(int32_ty, 3), // state->perms
+			builder.getInt32(0), // *state
+			builder.getInt32(2), // state->perms
 		},
 		"pp_perms"
 	);
@@ -343,8 +337,8 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	builder.SetInsertPoint(fault_path);
 	gen_vm_exit(
 		exit_info::ExitReason::Fault,
-		llvm::ConstantInt::get(int32_ty, pc-4),
-		llvm::ConstantInt::get(int32_ty, fault_type),
+		builder.getInt32(pc-4),
+		builder.getInt32(fault_type),
 		addr
 	);
 
@@ -380,11 +374,11 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	// Check alignment and branch
 	llvm::Value* addr_masked = builder.CreateAnd(
 		addr,
-		llvm::ConstantInt::get(int32_ty, len-1)
+		builder.getInt32(len-1)
 	);
 	llvm::Value* cmp = builder.CreateICmpNE(
 		addr_masked,
-		llvm::ConstantInt::get(int32_ty, 0),
+		builder.getInt32(0),
 		"cmp_align"
 	);
 	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
@@ -393,8 +387,8 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	builder.SetInsertPoint(fault_path);
 	gen_vm_exit(
 		exit_info::ExitReason::Fault,
-		llvm::ConstantInt::get(int32_ty, pc-4),
-		llvm::ConstantInt::get(int32_ty, fault_type),
+		builder.getInt32(pc-4),
+		builder.getInt32(fault_type),
 		addr
 	);
 
@@ -431,6 +425,75 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	// Check alignment
 	check_alignment_mem(addr, len, Mmu::PERM_WRITE, pc);
 
+	// DIRTY
+	// Basic blocks used
+	llvm::BasicBlock* prev_bb = builder.GetInsertBlock();
+	llvm::BasicBlock* for_body = 
+		llvm::BasicBlock::Create(context, "dirty_for_body", function);
+	llvm::BasicBlock* for_register_dirty =
+		llvm::BasicBlock::Create(context, "dirty_for_register_dirty", function);
+	llvm::BasicBlock* for_cond =
+		llvm::BasicBlock::Create(context, "dirty_for_cond", function);
+	llvm::BasicBlock* for_end =
+		llvm::BasicBlock::Create(context, "dirty_for_end", function);
+
+	// Prelude computations
+	llvm::Value* dirty_block_sz = builder.getInt32(Mmu::DIRTY_BLOCK_SIZE);
+	llvm::Value* addr_end = builder.CreateAdd(addr, builder.getInt32(len));
+	llvm::Value* block_begin = builder.CreateUDiv(addr, dirty_block_sz);
+	llvm::Value* block_end   = builder.CreateAdd(
+		builder.CreateUDiv(addr_end, dirty_block_sz),
+		builder.getInt32(1)
+	);
+	llvm::Value* state = &function->arg_begin()[0];
+	llvm::Value* pp_dirty_map = builder.CreateInBoundsGEP(
+		state,
+		{
+			builder.getInt32(0), // *state
+			builder.getInt32(4), // state->dirty_map
+		},
+		"pp_dirty_map"
+	);
+	llvm::Value* p_dirty_map = builder.CreateLoad(pp_dirty_map, "p_dirty_map");
+	llvm::Value* pp_dirty_vec = builder.CreateInBoundsGEP(
+		state,
+		{
+			builder.getInt32(0), // *state
+			builder.getInt32(3), // state->dirty_vec
+		},
+		"pp_dirty_vec"
+	);
+	llvm::Value* p_dirty_vec = builder.CreateLoad(pp_dirty_vec, "p_dirty_vec");
+	builder.CreateBr(for_body);
+
+	// For body. Load dirty value and branch
+	builder.SetInsertPoint(for_body);
+	llvm::PHINode* block = builder.CreatePHI(int32_ty, 2, "block");
+	block->addIncoming(block_begin, prev_bb);
+	llvm::Value* p_dirty_value =
+		builder.CreateInBoundsGEP(p_dirty_map, block, "p_dirty_value");
+	llvm::Value* dirty_value = builder.CreateLoad(p_dirty_value, "dirty_value");
+	llvm::Value* cmp_dirty = 
+		builder.CreateICmpEQ(dirty_value, builder.getInt8(0), "cmp_dirty");
+	builder.Insert(llvm::BranchInst::Create(for_register_dirty, for_cond,
+	                                        cmp_dirty));
+
+	// For, register dirty. Block was not dirty, set it as dirty and add it to
+	// the vector. Not sure for now
+	builder.SetInsertPoint(for_register_dirty);
+	builder.CreateStore(builder.getInt8(1), p_dirty_value);
+	builder.CreateBr(for_cond);
+
+	// For, increment block and check end condition.
+	builder.SetInsertPoint(for_cond);
+	llvm::Value* block_inc = builder.CreateAdd(block, builder.getInt32(1), "block_inc");
+	block->addIncoming(block_inc, for_cond);
+	llvm::Value* cmp_exit = builder.CreateICmpUGT(block_inc, block_end, "cmp_exit");
+	builder.Insert(llvm::BranchInst::Create(for_end, for_body, cmp_exit));
+
+	// For end. Continue with the store
+	builder.SetInsertPoint(for_end);
+
 	// Get pointer to memory position, cast it from i8* to iN*, cast value from
 	// ?? to iN, and write value to pointer
 	llvm::Value* p_value      = get_pmemory(addr);
@@ -439,6 +502,9 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	llvm::Value* p_value_cast = builder.CreateBitCast(p_value, cast_type_p);
 	llvm::Value* value_cast   = builder.CreateTrunc(value, cast_type_v);
 	builder.CreateStore(value_cast, p_value_cast);
+
+/* 	llvm::outs() << module;
+	die(""); */
 }
 
 llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
@@ -470,17 +536,22 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 		if (0x41e810 <= pc && pc <= 0x41e89c){
 			llvm::Value* p_num_inst = &function->arg_begin()[2];
 			llvm::Value* num_inst = builder.CreateLoad(p_num_inst);
-			llvm::Value* state_i = builder.CreateMul(num_inst, llvm::ConstantInt::get(int32_ty, 35));
+			llvm::Value* state_i = builder.CreateMul(num_inst, builder.getInt32(35));
 			llvm::Value* states = &function->arg_begin()[3];
 			llvm::Value* p_state = builder.CreateInBoundsGEP(states, state_i);
 			for (int i = 0; i < 34; i++){
-				llvm::Value* p_reg = builder.CreateInBoundsGEP(p_state, llvm::ConstantInt::get(int32_ty, i));
+				llvm::Value* p_reg = builder.CreateInBoundsGEP(p_state, builder.getInt32(i));
 				builder.CreateStore(get_reg(i), p_reg);
 			}
-			llvm::Value* p_reg = builder.CreateInBoundsGEP(p_state, llvm::ConstantInt::get(int32_ty, 34));
-			builder.CreateStore(llvm::ConstantInt::get(int32_ty, pc), p_reg);
-			llvm::Value* num_inst2 = builder.CreateAdd(num_inst, llvm::ConstantInt::get(int32_ty, 1));
+			llvm::Value* p_reg = builder.CreateInBoundsGEP(p_state, builder.getInt32(34));
+			builder.CreateStore(builder.getInt32(pc), p_reg);
+			llvm::Value* num_inst2 = builder.CreateAdd(num_inst, builder.getInt32(1));
 			builder.CreateStore(num_inst2, p_num_inst);
+		} */
+/* 		if (pc == 0x400ca8){
+			llvm::Value* reenter_pc = builder.getInt32(pc+4);
+			gen_vm_exit(exit_info::ExitReason::Breakpoint, reenter_pc);
+			break;
 		} */
 
 		end = handle_inst(pc);
@@ -547,7 +618,7 @@ bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
 	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
 	llvm::Value* cmp = builder.CreateICmpSGE(
 		get_reg(inst.s),
-		llvm::ConstantInt::get(int32_ty, 0),
+		builder.getInt32(0),
 		"cmp"
 	);
 	set_reg(Reg::ra, pc+4);
@@ -641,7 +712,7 @@ bool Jitter::inst_addu(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_sll(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* shamt = llvm::ConstantInt::get(int32_ty, inst.S);
+	llvm::Value* shamt = builder.getInt32(inst.S);
 	set_reg(inst.d, builder.CreateShl(get_reg(inst.t), shamt));
 	return false;
 }
@@ -687,7 +758,7 @@ bool Jitter::inst_lhu(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_syscall(vaddr_t pc, uint32_t val){
-	llvm::Value* reenter_pc = llvm::ConstantInt::get(int32_ty, pc);
+	llvm::Value* reenter_pc = builder.getInt32(pc);
 	gen_vm_exit(exit_info::ExitReason::Syscall, reenter_pc);
 	return true;
 }
@@ -704,7 +775,7 @@ bool Jitter::inst_sltu(vaddr_t pc, uint32_t val){
 	/* llvm::Value* sel = builder.CreateSelect(
 		cmp,
 		llvm::ConstantInt::get(context, llvm::APInt(32, 1)),
-		llvm::ConstantInt::get(int32_ty, 0)
+		builder.getInt32(0)
 	);
 	set_reg(inst.d, sel); */
 	set_reg(inst.d, cmp);
@@ -713,12 +784,12 @@ bool Jitter::inst_sltu(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_sltiu(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
-	llvm::Value* value = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C);
+	llvm::Value* value = builder.getInt32((int16_t)inst.C);
 	llvm::Value* cmp = builder.CreateICmpULT(get_reg(inst.s), value);
 	/* llvm::Value* sel = builder.CreateSelect(
 		cmp,
 		llvm::ConstantInt::get(context, llvm::APInt(32, 1)),
-		llvm::ConstantInt::get(int32_ty, 0)
+		builder.getInt32(0)
 	);
 	set_reg(inst.t, sel); */
 	set_reg(inst.t, cmp);
@@ -730,7 +801,7 @@ bool Jitter::inst_movn(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	llvm::Value* cmp = builder.CreateICmpNE(
 		get_reg(inst.t),
-		llvm::ConstantInt::get(int32_ty, 0)
+		builder.getInt32(0)
 	);
 	llvm::Value* sel = builder.CreateSelect(
 		cmp,
@@ -746,7 +817,7 @@ bool Jitter::inst_movz(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	llvm::Value* cmp = builder.CreateICmpEQ(
 		get_reg(inst.t),
-		llvm::ConstantInt::get(int32_ty, 0)
+		builder.getInt32(0)
 	);
 	llvm::Value* sel = builder.CreateSelect(
 		cmp,
@@ -773,7 +844,7 @@ bool Jitter::inst_teq(vaddr_t pc, uint32_t val){
 	builder.Insert(llvm::BranchInst::Create(trap_path, normal_path, cmp));
 	
 	builder.SetInsertPoint(trap_path);
-	llvm::Value* reenter_pc = llvm::ConstantInt::get(int32_ty, pc);
+	llvm::Value* reenter_pc = builder.getInt32(pc);
 	gen_vm_exit(exit_info::ExitReason::Exception, reenter_pc);
 
 	builder.SetInsertPoint(normal_path);
@@ -850,12 +921,12 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_rdhwr(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* reenter_pc = llvm::ConstantInt::get(int32_ty, pc);
+	llvm::Value* reenter_pc = builder.getInt32(pc);
 	gen_vm_exit(
 		exit_info::ExitReason::Rdhwr,
 		reenter_pc, 
-		llvm::ConstantInt::get(int32_ty, inst.d), 
-		llvm::ConstantInt::get(int32_ty, inst.t)
+		builder.getInt32(inst.d), 
+		builder.getInt32(inst.t)
 	);
 	return true;
 }
@@ -866,7 +937,7 @@ bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
 	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
 	llvm::Value* cmp = builder.CreateICmpSGE(
 		get_reg(inst.s),
-		llvm::ConstantInt::get(int32_ty, 0),
+		builder.getInt32(0),
 		"cmp"
 	);
 	handle_inst(pc);
@@ -883,33 +954,27 @@ bool Jitter::inst_slti(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* value = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* cmp   = builder.CreateICmpSLT(get_reg(inst.s), value);
-	/* llvm::Value* sel = builder.CreateSelect(
-		cmp,
-		llvm::ConstantInt::get(context, llvm::APInt(32, 1)),
-		llvm::ConstantInt::get(int32_ty, 0)
-	);
-	set_reg(inst.t, sel); */
 	set_reg(inst.t, cmp);
 	return false;
 }
 
 bool Jitter::inst_andi(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
-	llvm::Value* value = llvm::ConstantInt::get(int32_ty, inst.C);
+	llvm::Value* value = builder.getInt32(inst.C);
 	set_reg(inst.t, builder.CreateAnd(get_reg(inst.s), value));
 	return false;
 }
 
 bool Jitter::inst_ori(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
-	llvm::Value* value = llvm::ConstantInt::get(int32_ty, inst.C);
+	llvm::Value* value = builder.getInt32(inst.C);
 	set_reg(inst.t, builder.CreateOr(get_reg(inst.s), value));
 	return false;
 }
 
 bool Jitter::inst_xori(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
-	llvm::Value* value = llvm::ConstantInt::get(int32_ty, inst.C);
+	llvm::Value* value = builder.getInt32(inst.C);
 	set_reg(inst.t, builder.CreateXor(get_reg(inst.s), value));
 	return false;
 }
@@ -987,11 +1052,11 @@ bool Jitter::inst_seb(vaddr_t pc, uint32_t val){
 bool Jitter::inst_wsbh(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	llvm::Value* v     = get_reg(inst.t);
-	llvm::Value* int8  = llvm::ConstantInt::get(int32_ty, 8);
-	llvm::Value* mask1 = llvm::ConstantInt::get(int32_ty, 0xFF000000);
-	llvm::Value* mask2 = llvm::ConstantInt::get(int32_ty, 0x00FF0000);
-	llvm::Value* mask3 = llvm::ConstantInt::get(int32_ty, 0x0000FF00);
-	llvm::Value* mask4 = llvm::ConstantInt::get(int32_ty, 0x000000FF);
+	llvm::Value* int8  = builder.getInt32(8);
+	llvm::Value* mask1 = builder.getInt32(0xFF000000);
+	llvm::Value* mask2 = builder.getInt32(0x00FF0000);
+	llvm::Value* mask3 = builder.getInt32(0x0000FF00);
+	llvm::Value* mask4 = builder.getInt32(0x000000FF);
 	llvm::Value* res = builder.CreateOr({
 		builder.CreateLShr(builder.CreateAnd(v, mask1), int8),
 		builder.CreateShl (builder.CreateAnd(v, mask2), int8),
@@ -1004,7 +1069,7 @@ bool Jitter::inst_wsbh(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_srl(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* shamt = llvm::ConstantInt::get(int32_ty, inst.S);
+	llvm::Value* shamt = builder.getInt32(inst.S);
 	set_reg(inst.d, builder.CreateLShr(get_reg(inst.t), shamt));
 	return false;
 }
@@ -1033,7 +1098,7 @@ bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
 	llvm::Value* offset =
-		builder.CreateAnd(addr, llvm::ConstantInt::get(int32_ty, 3));
+		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
 	check_bounds_mem(addr_align, 4, Mmu::PERM_WRITE, pc);
@@ -1043,11 +1108,11 @@ bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
 	builder.CreateMemCpy(
 		builder.CreateInBoundsGEP(
 			builder.CreateBitCast(p_reg, int8ptr_ty),
-			builder.CreateSub(llvm::ConstantInt::get(int32_ty, 3), offset)),
+			builder.CreateSub(builder.getInt32(3), offset)),
 		4,     // dst align
 		p_mem, // src 
 		1,     // src align
-		builder.CreateAdd(offset, llvm::ConstantInt::get(int32_ty, 1))
+		builder.CreateAdd(offset, builder.getInt32(1))
 	);
 	return false;
 }
@@ -1057,7 +1122,7 @@ bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
 	llvm::Value* offset =
-		builder.CreateAnd(addr, llvm::ConstantInt::get(int32_ty, 3));
+		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
 	check_bounds_mem(addr_align, 4, Mmu::PERM_WRITE, pc);
@@ -1070,7 +1135,7 @@ bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
 		builder.CreateInBoundsGEP(builder.CreateBitCast(p_mem, int8ptr_ty), 
 		                          offset), 
 		1,     // src align
-		builder.CreateSub(llvm::ConstantInt::get(int32_ty, 4), offset)
+		builder.CreateSub(builder.getInt32(4), offset)
 	);
 	return false;
 }
@@ -1096,7 +1161,7 @@ bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
 	llvm::Value* offset =
-		builder.CreateAnd(addr, llvm::ConstantInt::get(int32_ty, 3));
+		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
 	check_bounds_mem(addr_align, 4, Mmu::PERM_WRITE, pc);
@@ -1108,9 +1173,9 @@ bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
 		4,     // dst align
 		builder.CreateInBoundsGEP(
 			builder.CreateBitCast(p_reg, int8ptr_ty),
-			builder.CreateSub(llvm::ConstantInt::get(int32_ty, 3), offset)), 
+			builder.CreateSub(builder.getInt32(3), offset)), 
 		1,     // src align
-		builder.CreateAdd(offset, llvm::ConstantInt::get(int32_ty, 1))
+		builder.CreateAdd(offset, builder.getInt32(1))
 	);
 	return false;
 }
@@ -1121,7 +1186,7 @@ bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
 	llvm::Value* offset =
-		builder.CreateAnd(addr, llvm::ConstantInt::get(int32_ty, 3));
+		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
 	// Instead of reading the reg, reading the value from memory, moving part of 
@@ -1137,14 +1202,14 @@ bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
 		1,     // dst align
 		p_reg, // src
 		4,     // src align
-		builder.CreateSub(llvm::ConstantInt::get(int32_ty, 4), offset)
+		builder.CreateSub(builder.getInt32(4), offset)
 	);
 	return false;
 }
 
 bool Jitter::inst_sllv(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* mask  = llvm::ConstantInt::get(int32_ty, 0b00011111);
+	llvm::Value* mask  = builder.getInt32(0b00011111);
 	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
 	set_reg(inst.d, builder.CreateShl(get_reg(inst.d), shamt));
 	return false;
@@ -1152,7 +1217,7 @@ bool Jitter::inst_sllv(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_srlv(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* mask  = llvm::ConstantInt::get(int32_ty, 0b00011111);
+	llvm::Value* mask  = builder.getInt32(0b00011111);
 	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
 	set_reg(inst.d, builder.CreateLShr(get_reg(inst.d), shamt));
 	return false;
@@ -1167,10 +1232,10 @@ bool Jitter::inst_slt(vaddr_t pc, uint32_t val){
 	/* llvm::Value* sel = builder.CreateSelect(
 		cmp,
 		llvm::ConstantInt::get(context, llvm::APInt(32, 1)),
-		llvm::ConstantInt::get(int32_ty, 0)
+		builder.getInt32(0)
 	);
 	set_reg(inst.t, sel); */
-	set_reg(inst.t, cmp);
+	set_reg(inst.d, cmp);
 	return false;
 }
 
@@ -1222,7 +1287,7 @@ bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
 	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
 	llvm::Value* cmp = builder.CreateICmpSGT(
 		get_reg(inst.s),
-		llvm::ConstantInt::get(int32_ty, 0),
+		builder.getInt32(0),
 		"cmp"
 	);
 	handle_inst(pc);
@@ -1280,8 +1345,8 @@ bool Jitter::inst_mtlo(vaddr_t pc, uint32_t val){
 bool Jitter::inst_ext(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	uint32_t size = inst.d + 1;
-	llvm::Value* lsb  = llvm::ConstantInt::get(int32_ty, inst.S);
-	llvm::Value* mask = llvm::ConstantInt::get(int32_ty, (1 << size) - 1);
+	llvm::Value* lsb  = builder.getInt32(inst.S);
+	llvm::Value* mask = builder.getInt32((1 << size) - 1);
 	set_reg(inst.t, 
 	        builder.CreateAnd(builder.CreateLShr(get_reg(inst.s), lsb), mask));
 	return false;
@@ -1290,8 +1355,8 @@ bool Jitter::inst_ext(vaddr_t pc, uint32_t val){
 bool Jitter::inst_ins(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	uint32_t size = inst.d - inst.S + 1;
-	llvm::Value* lsb  = llvm::ConstantInt::get(int32_ty, inst.S);
-	llvm::Value* mask = llvm::ConstantInt::get(int32_ty, (1 << size)-1);
+	llvm::Value* lsb  = builder.getInt32(inst.S);
+	llvm::Value* mask = builder.getInt32((1 << size)-1);
 	
 	// Get bits to insert, place them at the correct position
 	llvm::Value* ins  = builder.CreateAnd(get_reg(inst.s), mask);
@@ -1307,14 +1372,31 @@ bool Jitter::inst_ins(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_sra(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* shamt = llvm::ConstantInt::get(int32_ty, inst.S);
-	set_reg(inst.d, builder.CreateLShr(get_reg(inst.t), shamt));
+	llvm::Value* shamt = builder.getInt32(inst.S);
+	set_reg(inst.d, builder.CreateAShr(get_reg(inst.t), shamt));
+	return false;
+}
+
+bool Jitter::inst_srav(vaddr_t pc, uint32_t val){
+	inst_R_t inst(val);
+	llvm::Value* mask  = builder.getInt32(0b00011111);
+	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
+	set_reg(inst.d, builder.CreateAShr(get_reg(inst.t), shamt));
 	return false;
 }
 
 bool Jitter::inst_clz(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_R_t inst(val);
+	llvm::Function* ctlz_i32 = llvm::Intrinsic::getDeclaration(
+		p_module.get(),
+		llvm::Intrinsic::ctlz,
+	    {int32_ty}
+	);
+	llvm::ConstantInt* fals3 = llvm::ConstantInt::getFalse(context);
+	set_reg(inst.d, builder.CreateCall(ctlz_i32, {get_reg(inst.s), fals3}));
+	//llvm::outs() << module;
+	//die("ctlz\n");
+	return false;
 }
 
 bool Jitter::inst_lwc1(vaddr_t pc, uint32_t val){
@@ -1399,11 +1481,16 @@ bool Jitter::inst_bc1(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_cfc1(vaddr_t pc, uint32_t val){
 	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	return false;
+}
+
+bool Jitter::inst_ctc1(vaddr_t pc, uint32_t val){
+	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
+	return false;
 }
 
 bool Jitter::inst_break(vaddr_t pc, uint32_t val){
-	llvm::Value* reenter_pc = llvm::ConstantInt::get(int32_ty, pc);
+	llvm::Value* reenter_pc = builder.getInt32(pc);
 	gen_vm_exit(exit_info::ExitReason::Exception, reenter_pc);
 	return true;
 }
@@ -1485,7 +1572,7 @@ const inst_handler_jit_t Jitter::inst_handlers_R[] = {
 	&Jitter::inst_sllv,          // 000 100
 	&Jitter::inst_unimplemented, // 000 101
 	&Jitter::inst_srlv,          // 000 110
-	&Jitter::inst_unimplemented, // 000 111
+	&Jitter::inst_srav,          // 000 111
 	&Jitter::inst_jr,            // 001 000
 	&Jitter::inst_jalr,          // 001 001
 	&Jitter::inst_movz,          // 001 010
@@ -1723,7 +1810,7 @@ const inst_handler_jit_t Jitter::inst_handlers_COP1[] = {
 	&Jitter::inst_mfhc1,         // 00 011
 	&Jitter::inst_mtc1,          // 00 100
 	&Jitter::inst_unimplemented, // 00 101
-	&Jitter::inst_unimplemented, // 00 110
+	&Jitter::inst_ctc1,          // 00 110
 	&Jitter::inst_mthc1,         // 00 111
 	&Jitter::inst_bc1,           // 01 000
 	&Jitter::inst_unimplemented, // 01 001
@@ -1752,7 +1839,7 @@ const inst_handler_jit_t Jitter::inst_handlers_COP1[] = {
 };
 
 const char* exit_reason_map[] = {
-	"syscall", "fault", "indirect branch", "rdhwr", "exception",
+	"syscall", "fault", "indirect branch", "rdhwr", "exception", "breakpoint",
 };
 ostream& operator<<(ostream& os, const exit_info& exit_inf){
 	if (exit_inf.reason >= sizeof(exit_reason_map)/sizeof(const char*)){

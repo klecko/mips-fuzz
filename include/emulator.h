@@ -39,7 +39,7 @@ class Emulator {
 
 		// FPU registers and condition codes
 		float     fpregs[32];
-		std::bitset<8> ccs;
+		uint8_t   ccs;
 
 		// Handling of branches. If condition is true, pc must be updated to
 		// jump_addr in next cycle
@@ -256,6 +256,7 @@ class Emulator {
 		void inst_mtlo(uint32_t);
 		void inst_ext(uint32_t);
 		void inst_sra(uint32_t);
+		void inst_srav(uint32_t);
 		void inst_clz(uint32_t);
 		void inst_lwc1(uint32_t);
 		void inst_swc1(uint32_t);

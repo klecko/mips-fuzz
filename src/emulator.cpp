@@ -20,7 +20,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	pc        = 0;
 	prev_pc   = 0;
 	memset(fpregs, 0, sizeof(fpregs));
-	ccs.reset();
+	ccs       = 0;
 	condition = false;
 	jump_addr = 0;
 	rec_cov   = false;
@@ -69,12 +69,14 @@ double Emulator::getd_reg(uint8_t reg) const{
 
 void Emulator::set_cc(uint8_t cc, bool val){
 	assert(0 <= cc && cc <= 7);
-	ccs[cc] = val;
+	uint8_t bit = 1 << cc;
+	ccs = (val ? (ccs | bit) : (ccs & ~bit));
 }
 
 bool Emulator::get_cc(uint8_t cc) const {
-	// This performs range checks
-	return ccs.test(cc);
+	assert(0 <= cc && cc <= 7);
+	uint8_t bit = 1 << cc;
+	return (ccs & bit);
 }
 
 void Emulator::set_pc(vaddr_t addr){
@@ -292,22 +294,6 @@ void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 	}
 }
 
-void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
-	uint32_t result = 0;
-	switch (hwr){
-		case 29: // 0b11101, User Local Register
-			if (!tls)
-				printf("WARNING reading not set tls\n");
-			result = tls;
-			break;
-
-		default:
-			die("Unimplemented rdhwr at 0x%X: %d\n", prev_pc, hwr);
-	}
-	
-	set_reg(reg, result);
-}
-
 const char* regs_map[] = {
 	"00",  "at", "v0", "v1",
 	"a0", "a1", "a2", "a3",
@@ -329,9 +315,12 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 
 	jit_state state = {
 		regs,
-		fpregs,
 		mmu.get_memory(),
 		mmu.get_perms(),
+		mmu.get_dirty_vec(),
+		mmu.get_dirty_map(),
+		fpregs,
+		&ccs,
 	};
 	exit_info exit_inf;
 	uint32_t num_inst = 0;
@@ -346,11 +335,10 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		if (!jit_cache.count(pc))
 			jit_cache[pc] = Jitter(pc, mmu).get_result();
 		jit_block = jit_cache[pc];
-		printf("Running 0x%X\n", pc);
 		//cout << *this << endl << endl;
 		jit_block(&state, &exit_inf, &num_inst, regs_state);
 		//cout << *this << endl;
-		cout << exit_inf << endl;
+		//cout << exit_inf << endl;
 
 		// Handle the vm exit
 		switch (exit_inf.reason){
@@ -361,10 +349,13 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 				break;
 			case exit_info::ExitReason::Fault:
 				throw Fault((Fault::Type)exit_inf.info1, exit_inf.info2);
-			case exit_info::Exception:
+			case exit_info::ExitReason::Exception:
 				die("Exception??\n");
 			case exit_info::ExitReason::Rdhwr:
 				handle_rdhwr(exit_inf.info1, exit_inf.info2);
+				break;
+			case exit_info::ExitReason::Breakpoint:
+				test_bp();
 				break;
 			default:
 				die("Unknown exit reason: %d\n", exit_inf.reason);
@@ -401,6 +392,7 @@ uint64_t Emulator::run_until(vaddr_t pc){
 }
 
 void Emulator::test_bp(){
+	cout << *this << endl;
 	die("test bp\n");
 }
 
@@ -460,13 +452,11 @@ void Emulator::calloc_bp(){
 uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){
 	vaddr_t brk = mmu.get_brk();
 
-	// Attempt to get current brk
-	if (!new_brk)
-		return brk;
-
-	// Attempt to change brk
-	error = !mmu.set_brk(new_brk);
-	brk   = (error ? brk : new_brk);
+	// When new_brk is 0, it's an attempt to get current brk
+	if (new_brk){
+		error = !mmu.set_brk(new_brk);
+		brk   = (error ? brk : new_brk);
+	}
 	dbgprintf("brk(0x%X) --> 0x%X\n", new_brk, brk);
 	return brk;
 }
@@ -478,21 +468,26 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 	die(""); */
 	string pathname = mmu.read_string(pathname_addr);
 
-	// Find unused fd
-	uint32_t fd = 3;
-	while (open_files.count(fd))
-		fd++;
-
+	// Result fd
+	uint32_t fd;
+	
 	// Create input file
 	if (pathname == "input_file"){
 		if ((flags & O_RDWR) == O_RDWR || (flags & O_WRONLY) == O_WRONLY)
 			die("opening input file with write permissions");
 		
+		// Find unused fd
+		fd = 3;
+		while (open_files.count(fd))
+			fd++;
+
 		// God, forgive me for this casting.
 		File input_file(flags, (char*)input, input_sz);
 		open_files[fd] = move(input_file);
-	} else
-		die("Unimplemented openat\n");
+	} else if (pathname == "/dev/tty")
+		fd = 1;
+	else
+		die("Unimplemented openat %s\n", pathname.c_str());
 
 	dbgprintf("openat(%d, \"%s\", %d) --> %d\n", dirfd, pathname.c_str(), flags, fd);
 	error = 0;
@@ -762,6 +757,7 @@ uint32_t Emulator::sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& er
 }
 
 void Emulator::handle_syscall(uint32_t syscall){
+	dbgprintf("syscall %u\n", syscall);
 	switch (syscall){
 		case 4001: // exit
 		case 4246: // exit_group
@@ -892,6 +888,22 @@ void Emulator::handle_syscall(uint32_t syscall){
 		default:
 			die("Unimplemented syscall at 0x%X: %d\n", prev_pc, syscall);
 	}
+}
+
+void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
+	uint32_t result = 0;
+	switch (hwr){
+		case 29: // 0b11101, User Local Register
+			if (!tls)
+				printf("WARNING reading not set tls\n");
+			result = tls;
+			break;
+
+		default:
+			die("Unimplemented rdhwr at 0x%X: %d\n", prev_pc, hwr);
+	}
+	
+	set_reg(reg, result);
 }
 
 ostream& operator<<(ostream& os, const Emulator& emu){

@@ -17,9 +17,12 @@ enum Reg {
 
 struct jit_state {
 	uint32_t* regs;
-	float*    fpregs;
 	uint8_t*  memory;
 	uint8_t*  perms;
+	vaddr_t*  dirty_vec;
+	uint8_t*  dirty_map;
+	float*    fpregs;
+	uint8_t*  ccs;
 };
 
 struct exit_info {
@@ -28,7 +31,8 @@ struct exit_info {
 		Fault,
 		IndirectBranch,
 		Rdhwr,
-		Exception, // trap or breakpoint
+		Exception, // trap or break
+		Breakpoint,
 	};
 	ExitReason reason;
 	vaddr_t    reenter_pc;
@@ -176,6 +180,7 @@ class Jitter {
 		bool inst_ext(vaddr_t, uint32_t);
 		bool inst_ins(vaddr_t, uint32_t);
 		bool inst_sra(vaddr_t, uint32_t);
+		bool inst_srav(vaddr_t, uint32_t);
 		bool inst_clz(vaddr_t, uint32_t);
 		bool inst_lwc1(vaddr_t, uint32_t);
 		bool inst_swc1(vaddr_t, uint32_t);
@@ -194,6 +199,7 @@ class Jitter {
 		bool inst_c_cond_d(vaddr_t, uint32_t);
 		bool inst_bc1(vaddr_t, uint32_t);
 		bool inst_cfc1(vaddr_t, uint32_t);
+		bool inst_ctc1(vaddr_t, uint32_t);
 		bool inst_break(vaddr_t, uint32_t);
 };
 

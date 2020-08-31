@@ -83,7 +83,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_sllv,          // 000 100
 	&Emulator::inst_unimplemented, // 000 101
 	&Emulator::inst_srlv,          // 000 110
-	&Emulator::inst_unimplemented, // 000 111
+	&Emulator::inst_srav,          // 000 111
 	&Emulator::inst_jr,            // 001 000
 	&Emulator::inst_jalr,          // 001 001
 	&Emulator::inst_movz,          // 001 010
@@ -841,13 +841,18 @@ void Emulator::inst_sra(uint32_t val){
 	set_reg(inst.d, (int32_t)get_reg(inst.t) >> inst.S);
 }
 
+void Emulator::inst_srav(uint32_t val){
+	inst_R_t inst(val);
+	set_reg(inst.d, (int32_t)get_reg(inst.t) >> (get_reg(inst.s) & 0b00011111));
+}
+
 void Emulator::inst_clz(uint32_t val){
 	inst_R_t inst(val);
 	uint32_t value = get_reg(inst.s);
 	uint32_t result = 0;
 	
 	// Count leading zeros
-	while ( (value & (1<<(31-result))) == 0 && result<32) result++;
+	while ( (value & (1<<(31-result))) == 0 && result<32 ) result++;
 	set_reg(inst.d, result);	
 }
 
@@ -988,9 +993,9 @@ void Emulator::inst_cfc1(uint32_t val){
 		case 31: // FCSR. Qemu uses all fields 0 except CCs
 			value = 0;
 			// Set CCs
-			value |= (ccs.test(0) << 23);
+			value |= (get_cc(0) << 23);
 			for (int i = 1; i < 8; i++)
-				value |= (ccs.test(i) << (24+i));
+				value |= (get_cc(i) << (24+i));
 			break;
 
 		default:
