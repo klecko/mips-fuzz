@@ -15,7 +15,8 @@ enum Reg {
 	hi,   lo,
 };
 
-struct jit_state {
+// Struct that will be accessed by the jitted code to modify the VM
+struct vm_state {
 	uint32_t* regs;
 	uint8_t*  memory;
 	uint8_t*  perms;
@@ -26,6 +27,8 @@ struct jit_state {
 	uint8_t*  ccs;
 };
 
+// Struct that will be modified by the jitted code when returning to notify
+// exit information
 struct exit_info {
 	enum ExitReason: uint32_t {
 		Syscall = 0,
@@ -42,7 +45,7 @@ struct exit_info {
 	friend std::ostream& operator<<(std::ostream& os, const exit_info& exit_inf);
 };
 
-typedef void (*jit_block_t)(jit_state*, exit_info*, uint32_t*, uint32_t arr[][35]);
+typedef void (*jit_block_t)(vm_state*, exit_info*, uint32_t*, uint32_t arr[][35]);
 typedef std::unordered_map<vaddr_t, jit_block_t> jit_cache_t;
 
 class Jitter;
@@ -58,29 +61,50 @@ class Jitter {
 		llvm::Module&      module;
 		llvm::IRBuilder<>  builder;
 		llvm::Function*    function;
-		std::unordered_map<vaddr_t, llvm::BasicBlock*> basic_blocks;
-		jit_block_t        result;
 
+		// Map of created basic blocks. A basic block is not created if it
+		// is registered here. This way we avoid things like infinite recursion
+		// in loops
+		std::unordered_map<vaddr_t, llvm::BasicBlock*> basic_blocks;
+
+		// Resulting jit block
+		jit_block_t result;
+
+		// Attempt to load JIT code associated to `name` from disk cache
 		bool load_from_disk(const std::string& name);
 
+		// Read a field from vm_state struct
+		llvm::Value* get_state_field(uint8_t field, const std::string& name);
+
+		// Get pointer to register `reg`
 		llvm::Value* get_preg(uint8_t reg);
+
+		// Get value of register `reg`
 		llvm::Value* get_reg(uint8_t reg);
+
+		// Set register `reg` to `val`
 		void set_reg(uint8_t reg, llvm::Value* val);
 		void set_reg(uint8_t reg, uint32_t val);
 
-		llvm::Value* get_state_field(uint8_t field, const std::string& name);
-
+		// Get pointer to virtual memory address `addr`
 		llvm::Value* get_pmemory(llvm::Value* addr);
 
+		// Generate vm exit with given information
 		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-		                llvm::Value* info1=NULL, llvm::Value* info2=NULL);
+		                 llvm::Value* info1=NULL, llvm::Value* info2=NULL);
 
+		// Generation of memory access checks. We also generate a fault vm exit
+		// so faults are notified at runtime if any check fails.
+
+		// Generate bounds checks for memory access
 		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 		                      vaddr_t pc);
 
+		// Generate perms checks for memory access
 		void check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 		                     vaddr_t pc);
 
+		// Generate alignment checks for memory access
 		void check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm, 
 		                         vaddr_t pc);
 
@@ -91,8 +115,15 @@ class Jitter {
 		void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 		               vaddr_t pc);
 
+		// Lift code at `pc`. It calls instruction handlers, which eventually
+		// create other blocks until every path leads to a vm exit
 		llvm::BasicBlock* create_block(vaddr_t pc);
+
+		// Handle instruction at `pc`. It calls the proper instruction handler,
+		// which will lift code for that instruction
 		bool handle_inst(vaddr_t pc);
+
+		// Compile module: optimize IR, compile it and dump it to disk
 		void compile();
 
 	public:

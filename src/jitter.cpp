@@ -41,7 +41,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 {
 	thread_local jit_init init; // static?
 
-	// PC in hex
+	// Get function name
 	ostringstream oss;
 	oss << hex << pc;
 	string pc_s(oss.str());
@@ -51,7 +51,9 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	if (load_from_disk(func_name))
 		return;
 
+	// We couldn't load it from disk. Time to JIT
 	printf("starting jit 0x%X\n", pc);
+
 	// Get types
 	void_ty      = llvm::Type::getVoidTy(context);
 	int8_ty      = llvm::Type::getInt8Ty(context);
@@ -63,7 +65,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	int32ptr_ty  = llvm::Type::getInt32PtrTy(context);
 	floatptr_ty  = llvm::Type::getFloatPtrTy(context);
 
-	llvm::Type* jit_state_ty = llvm::StructType::get(context,
+	llvm::Type* vm_state_ty = llvm::StructType::get(context,
 		{
 			int32ptr_ty, // regs
 			int8ptr_ty,  // memory
@@ -75,7 +77,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 			int8ptr_ty,  // ccs
 		}
 	);
-	llvm::Type* p_jit_state_ty = llvm::PointerType::get(jit_state_ty, 0);
+	llvm::Type* p_vm_state_ty = llvm::PointerType::get(vm_state_ty, 0);
 
 	llvm::Type* exit_info_ty = llvm::StructType::get(context,
 		{
@@ -90,7 +92,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	// Create function
 	llvm::FunctionType* function_type = llvm::FunctionType::get(
 		void_ty,          // ret
-		{p_jit_state_ty, p_exit_info_ty, int32ptr_ty, int32ptr_ty}, // args
+		{p_vm_state_ty, p_exit_info_ty, int32ptr_ty, int32ptr_ty}, // args
 		false             // varargs
 	);
 	function = llvm::Function::Create(
@@ -101,7 +103,8 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	);
 
 	// Create entry basic block
-	llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", function);
+	llvm::BasicBlock* entry_block =
+		llvm::BasicBlock::Create(context, "entry", function);
 
 	// Create basic blocks recursively
 	llvm::BasicBlock* bb = create_block(pc);
@@ -121,7 +124,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 }
 
 bool Jitter::load_from_disk(const string& name){
-	// Check if file existis
+	// Check if file exists
 	string cache_name = "jitcache/" + name;
 	if (access(cache_name.c_str(), R_OK) == -1)
 		return false;
@@ -144,7 +147,9 @@ bool Jitter::load_from_disk(const string& name){
 		return false;
 	}
 
-	// Create execution engine, add object file and JIT
+	// Create execution engine, add object file and get pointer to function.
+	// Unlike in compile(), here we don't JIT because we are adding an object
+	// which is already compiled
 	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module))
 		.setEngineKind(llvm::EngineKind::JIT)
 		.create();
@@ -161,7 +166,8 @@ void Jitter::compile(){
 	// Get target machine
 	string error;
 	string triple = llvm::sys::getDefaultTargetTriple();
-	const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, error);
+	const llvm::Target* target =
+		llvm::TargetRegistry::lookupTarget(triple, error);
 	if (!target)
 		die("err target: %s\n", error.c_str());
 
@@ -212,7 +218,8 @@ void Jitter::compile(){
 		die("error opening cache for writing: %s\n", ec.message().c_str());
 
 	llvm::legacy::PassManager pass_dumper;
-	machine->addPassesToEmitFile(pass_dumper, os, nullptr, llvm::TargetMachine::CodeGenFileType::CGFT_ObjectFile);
+	machine->addPassesToEmitFile(pass_dumper, os, nullptr, 
+	                             llvm::TargetMachine::CGFT_ObjectFile);
 	pass_dumper.run(module);
 	if (ec)
 		die("error dumping objfile to disk: %s\n", ec.message().c_str());
@@ -222,7 +229,22 @@ jit_block_t Jitter::get_result(){
 	return result;
 }
 
+llvm::Value* Jitter::get_state_field(uint8_t field, const string& name){
+	// Get pointer to field and load it
+	llvm::Value* p_value = builder.CreateInBoundsGEP(
+		&function->arg_begin()[0],
+		{
+			builder.getInt32(0),     // *state
+			builder.getInt32(field), // state->field
+		},
+		"p_" + name
+	);
+	llvm::Value* value = builder.CreateLoad(p_value, name);
+	return value;
+}
+
 llvm::Value* Jitter::get_preg(uint8_t reg){
+	// Get pointer to regs[reg]
 	assert(1 <= reg && reg <= 33); // 0 is reg zero
 	llvm::Value* p_regs = get_state_field(0, "p_regs");
 	llvm::Value* p_reg  = builder.CreateInBoundsGEP(
@@ -234,6 +256,7 @@ llvm::Value* Jitter::get_preg(uint8_t reg){
 }
 
 llvm::Value* Jitter::get_reg(uint8_t reg){
+	// Get pointer to reg and load it
 	assert(0 <= reg && reg <= 33);
 	llvm::Value* reg_val;
 	if (reg == 0)
@@ -246,6 +269,7 @@ llvm::Value* Jitter::get_reg(uint8_t reg){
 }
 
 void Jitter::set_reg(uint8_t reg, llvm::Value* val){
+	// Get pointer to reg and write zero extended val
 	assert(0 <= reg && reg <= 33);
 	llvm::Value* val_zext = builder.CreateZExt(val, int32_ty);
 	if (reg != 0){
@@ -255,11 +279,11 @@ void Jitter::set_reg(uint8_t reg, llvm::Value* val){
 }
 
 void Jitter::set_reg(uint8_t reg, uint32_t val){
-	llvm::Value* v = builder.getInt32(val);
-	set_reg(reg, v);
+	set_reg(reg, builder.getInt32(val));
 }
 
 llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
+	// Get pointer to memory[addr]
 	llvm::Value* p_memory = get_state_field(1, "p_memory");
 	llvm::Value* p_value = builder.CreateInBoundsGEP(
 		p_memory,
@@ -269,22 +293,10 @@ llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
 	return p_value;
 }
 
-llvm::Value* Jitter::get_state_field(uint8_t field, const string& name){
-	llvm::Value* p_value = builder.CreateInBoundsGEP(
-		&function->arg_begin()[0],
-		{
-			builder.getInt32(0), // *state
-			builder.getInt32(field), // state->field
-		},
-		"p_" + name
-	);
-	llvm::Value* value = builder.CreateLoad(p_value, name);
-	return value;
-}
-
 void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
                          llvm::Value* info1, llvm::Value* info2)
 {
+	// Get pointer to exit info fields, write to them and return
 	llvm::Value* p_exit_info = &function->arg_begin()[1];
 	llvm::Value* p_exit_reason = builder.CreateInBoundsGEP(
 		p_exit_info,
@@ -409,14 +421,14 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	llvm::Value* p_perms = get_state_field(2, "p_perms");
 	llvm::Value* p_perm  = builder.CreateInBoundsGEP(
 		p_perms,
-		{ addr },
+		addr,
 		"p_perm"
 	);
 	llvm::Value* p_perm_cast =
 		builder.CreateBitCast(p_perm, ptr_ty, "p_perm_cast");
 	llvm::Value* perm_val = builder.CreateLoad(p_perm_cast, "perm");
 
-	// And it with perm_masks, check if they're equal and branch
+	// And perm value with perm_masks, check if they're equal and branch
 	llvm::Value* result = builder.CreateAnd(perm_val, perms_mask_val);
 	llvm::Value* cmp = builder.CreateICmpNE(result, perms_mask_val, "cmp_perms");
 	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
@@ -485,6 +497,8 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 }
 
 llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc){
+	assert(len != 0);
+
 	// Check out of bounds
 	check_bounds_mem(addr, len, Mmu::PERM_READ, pc);
 
@@ -504,6 +518,8 @@ llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc){
 void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
                        vaddr_t pc)
 {
+	assert(len != 0);
+
 	// Check out of bounds
 	check_bounds_mem(addr, len, Mmu::PERM_WRITE, pc);
 
@@ -513,16 +529,19 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	// Check alignment
 	check_alignment_mem(addr, len, Mmu::PERM_WRITE, pc);
 
-	// DIRTY. Code:
-	/*
-	block_begin = addr/DIRTY_BLOCK_SIZE
-	block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1
-	for (block = block_begin; block < block_end; block++){
-		if (!dirty_map[block]){
-			dirty_vec[dirty_size++] = block
-			dirty_map[block] = true
-		}
-	}
+	/* DIRTY. Pseudocode:
+	 *
+	 * block_begin = addr/DIRTY_BLOCK_SIZE
+	 * block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1
+	 * for (block = block_begin; block < block_end; block++){
+	 *     if (!dirty_map[block]){
+	 *         dirty_vec[dirty_size++] = block
+	 *         dirty_map[block] = true
+	 *     }
+	 * }
+	 * 
+	 * Actually it doesn't check the condition first, so it always performs
+	 * at least one iteration, which is consistent with having len > 0.
 	*/
 
 	// Basic blocks used
@@ -536,10 +555,11 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	llvm::BasicBlock* for_end =
 		llvm::BasicBlock::Create(context, "dirty_for_end", function);
 
-	// Prelude computations
+	// Computations before entering for body
 	llvm::Value* dirty_block_sz = builder.getInt32(Mmu::DIRTY_BLOCK_SIZE);
-	llvm::Value* addr_end = builder.CreateAdd(addr, builder.getInt32(len));
-	llvm::Value* block_begin = builder.CreateUDiv(addr, dirty_block_sz, "block_begin");
+	llvm::Value* addr_end    = builder.CreateAdd(addr, builder.getInt32(len));
+	llvm::Value* block_begin = builder.CreateUDiv(addr, dirty_block_sz,
+	                                              "block_begin");
 	llvm::Value* block_end   = builder.CreateAdd(
 		builder.CreateUDiv(addr_end, dirty_block_sz),
 		builder.getInt32(1),
@@ -562,23 +582,23 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	builder.Insert(llvm::BranchInst::Create(for_register_dirty, for_cond,
 	                                        cmp_dirty));
 
-	// For, register dirty. Block was not dirty: set it as dirty and add it to
-	// the vector.
+	// For register dirty. Block was not dirty: set it as dirty in the map and
+	// add it to the vector.
 	builder.SetInsertPoint(for_register_dirty);
-	builder.CreateStore(builder.getInt8(1), p_dirty_value); // update map
+	builder.CreateStore(builder.getInt8(1), p_dirty_value);
 	llvm::Value* dirty_size = builder.CreateLoad(p_dirty_size, "dirty_size");
 	builder.CreateStore(block, builder.CreateInBoundsGEP(p_dirty_vec, dirty_size));
 	builder.CreateStore(builder.CreateAdd(dirty_size, builder.getInt32(1)),
 	                    p_dirty_size);
 	builder.CreateBr(for_cond);
 
-	// For, increment block and check end condition.
+	// For cond, increment block and check end condition.
 	builder.SetInsertPoint(for_cond);
 	llvm::Value* block_inc = builder.CreateAdd(block, builder.getInt32(1),
 	                                           "block_inc");
 	block->addIncoming(block_inc, for_cond);
-	llvm::Value* cmp_exit = builder.CreateICmpUGE(block_inc, block_end,
-	                                              "cmp_exit");
+	llvm::Value* cmp_exit  = builder.CreateICmpUGE(block_inc, block_end,
+	                                               "cmp_exit");
 	builder.Insert(llvm::BranchInst::Create(for_end, for_body, cmp_exit));
 
 	// For end. Continue with the store
@@ -653,6 +673,7 @@ bool Jitter::handle_inst(vaddr_t pc){
 	uint32_t inst   = mmu.read_inst(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
 
+	// Call instruction handler
  	if (inst)
 		return (this->*inst_handlers[opcode])(pc+4, inst);
 

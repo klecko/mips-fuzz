@@ -313,7 +313,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 	this->input    = input.c_str();
 	this->input_sz = input.size();
 
-	jit_state state = {
+	vm_state state = {
 		regs,
 		mmu.get_memory(),
 		mmu.get_perms(),
