@@ -94,7 +94,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			local_stats.run_cycles += rdtsc() - cycles;
 
 			local_stats.cases++;
-			corpus.report_cov(id, cov);
+			//corpus.report_cov(id, cov);
 
 			if (SINGLE_RUN)
 				die("end\n");
@@ -111,23 +111,24 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 	}
 }
 
+void create_folder(const char* name){
+	// If folder doesn't exist, create it. If it exists, check it is an
+	// actual folder
+	struct stat st;
+	if (stat(name, &st) == -1){
+		if (mkdir(name, S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) == -1)
+			die("Creating dir %s: %s\n", name, strerror(errno));
+	} else if (!(st.st_mode & S_IFDIR))
+		die("%s is not a folder\n", name);
+}
+
 int main(){
 	const int num_threads = 1;//(DEBUG ? 1 : thread::hardware_concurrency());
 	cout << "Threads: " << num_threads << endl;
 
 	// Create crash folder
-	struct stat st;
-	if (stat("./crashes", &st) == -1){
-		// Assume folder doesn't exist. Create it
-		if (mkdir("./crashes", S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) == -1){
-			cerr << "Creating crashes folder: " << strerror(errno) << endl;
-			return -1;
-		}
-	} else if (!(st.st_mode & S_IFDIR)) {
-		// It exists. Check it is a folder
-		cerr << "./crashes is not a folder" << endl;
-		return -1;
-	}
+	create_folder("./crashes");
+	create_folder("./jitcache");
 
 	// Create shared objects
 	Stats stats;

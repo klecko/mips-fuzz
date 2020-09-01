@@ -1,31 +1,18 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <unistd.h>
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
-#include "llvm/ExecutionEngine/SectionMemoryManager.h"
-#include "llvm/ExecutionEngine/Orc/CompileUtils.h"
-#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/LinkAllPasses.h"
-#include "llvm/Passes/PassBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "jitter.h"
 #include "inst_decoding.h"
-
-/* #include <llvm/Transforms/IPO.h>
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/Analysis/TargetLibraryInfo.h>
-#include <llvm/Analysis/TargetTransformInfo.h>
-#include <llvm/Transforms/IPO/PassManagerBuilder.h>
-#include "llvm/Support/TargetRegistry.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h" */
-
 
 using namespace std;
 
@@ -39,17 +26,32 @@ llvm::Type* int8ptr_ty;
 llvm::Type* int32ptr_ty;
 llvm::Type* floatptr_ty;
 
+struct jit_init {
+	jit_init(){
+		llvm::InitializeNativeTarget();
+		llvm::InitializeNativeTargetAsmPrinter();
+		llvm::InitializeNativeTargetAsmParser();
+	}
+};
+
 Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	mmu(_mmu), p_context(new llvm::LLVMContext),
 	p_module(new llvm::Module("module", *p_context)),
 	context(*p_context), module(*p_module), builder(context)
 {
-	printf("starting jit 0x%X\n", pc);
+	thread_local jit_init init; // static?
+
 	// PC in hex
 	ostringstream oss;
 	oss << hex << pc;
 	string pc_s(oss.str());
+	string func_name = "func_" + pc_s;
 
+	// Try to load from disk if it was jitted in previous runs
+	if (load_from_disk(func_name))
+		return;
+
+	printf("starting jit 0x%X\n", pc);
 	// Get types
 	void_ty      = llvm::Type::getVoidTy(context);
 	int8_ty      = llvm::Type::getInt8Ty(context);
@@ -94,7 +96,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	function = llvm::Function::Create(
 		function_type,
 		llvm::GlobalValue::LinkageTypes::ExternalLinkage,
-		"func_" + pc_s,
+		func_name,
 		module
 	);
 
@@ -118,36 +120,102 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	compile();
 }
 
-struct jit_init {
-	jit_init(){
-		llvm::InitializeNativeTarget();
-		llvm::InitializeNativeTargetAsmPrinter();
-		llvm::InitializeNativeTargetAsmParser();
+bool Jitter::load_from_disk(const string& name){
+	// Check if file existis
+	string cache_name = "jitcache/" + name;
+	if (access(cache_name.c_str(), R_OK) == -1)
+		return false;
+
+	cout << "Loading cached " << name << endl;
+
+	// Read file into memory buffer
+	auto buffer = llvm::MemoryBuffer::getFile(cache_name);
+	if (!buffer){
+		cout << "Error reading cache " << name << ": "
+		     << buffer.getError().message() << endl;
+		return false;
 	}
-};
+
+	// Create object file from memory buffer
+	auto obj = llvm::object::ObjectFile::createObjectFile(
+		buffer.get()->getMemBufferRef());
+	if (!obj){
+		cout << "Error creating obj for cache " << name << endl;
+		return false;
+	}
+
+	// Create execution engine, add object file and JIT
+	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module))
+		.setEngineKind(llvm::EngineKind::JIT)
+		.create();
+	ee->addObjectFile(move(obj.get()));
+	result = (jit_block_t)ee->getFunctionAddress(name);
+	if (result == NULL){
+		cout << "Error getting function address for cache " << name << endl;
+		return false;
+	}
+	return true;
+}
 
 void Jitter::compile(){
-	thread_local jit_init init; // static?
+	// Get target machine
+	string error;
+	string triple = llvm::sys::getDefaultTargetTriple();
+	const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, error);
+	if (!target)
+		die("err target: %s\n", error.c_str());
 
+	llvm::SubtargetFeatures subtarget_features;
+	llvm::StringMap<bool> feature_map;
+	if (llvm::sys::getHostCPUFeatures(feature_map))
+		for (auto &feature : feature_map)
+			subtarget_features.AddFeature(feature.first(), feature.second);
+	string features = subtarget_features.getString();
+
+	llvm::TargetMachine* machine = target->createTargetMachine(
+		triple,
+		llvm::sys::getHostCPUName(),
+		features,
+		llvm::TargetOptions(),
+		llvm::Optional<llvm::Reloc::Model>()
+	);
+
+	// Optimize IR
 	llvm::legacy::FunctionPassManager fpm(p_module.get());
-	fpm.add(llvm::createPromoteMemoryToRegisterPass()); //SSA conversion
-	fpm.add(llvm::createCFGSimplificationPass()); //Dead code elimination
+	fpm.add(llvm::createPromoteMemoryToRegisterPass());
+	fpm.add(llvm::createCFGSimplificationPass());
 	fpm.add(llvm::createSROAPass());
 	fpm.add(llvm::createLoopSimplifyCFGPass());
 	fpm.add(llvm::createConstantPropagationPass());
-	fpm.add(llvm::createNewGVNPass());//Global value numbering
+	fpm.add(llvm::createNewGVNPass());
 	fpm.add(llvm::createReassociatePass());
-	fpm.add(llvm::createPartiallyInlineLibCallsPass()); //Inline standard calls
+	fpm.add(llvm::createPartiallyInlineLibCallsPass());
 	fpm.add(llvm::createDeadCodeEliminationPass());
-	fpm.add(llvm::createCFGSimplificationPass()); //Cleanup
+	fpm.add(llvm::createCFGSimplificationPass());
 	fpm.add(llvm::createInstructionCombiningPass());
-	fpm.add(llvm::createFlattenCFGPass()); //Flatten the control flow graph.
+	fpm.add(llvm::createFlattenCFGPass());
 	fpm.doInitialization();
-	for (auto& func : module)
+	for (llvm::Function& func : module)
 		fpm.run(func);
 
-	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module)).create();
+	// Compile
+	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module))
+		.setEngineKind(llvm::EngineKind::JIT)
+		.create(machine);
 	result = (jit_block_t)ee->getFunctionAddress(function->getName());
+
+	// Dump to disk
+	string cache_name = ("jitcache/" + function->getName()).str();
+	error_code ec;
+	llvm::raw_fd_ostream os(cache_name, ec);
+	if (ec)
+		die("error opening cache for writing: %s\n", ec.message().c_str());
+
+	llvm::legacy::PassManager pass_dumper;
+	machine->addPassesToEmitFile(pass_dumper, os, nullptr, llvm::TargetMachine::CodeGenFileType::CGFT_ObjectFile);
+	pass_dumper.run(module);
+	if (ec)
+		die("error dumping objfile to disk: %s\n", ec.message().c_str());
 }
 
 jit_block_t Jitter::get_result(){
@@ -524,17 +592,12 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	llvm::Value* p_value_cast = builder.CreateBitCast(p_value, cast_type_p);
 	llvm::Value* value_cast   = builder.CreateTrunc(value, cast_type_v);
 	builder.CreateStore(value_cast, p_value_cast);
-
-/* 	llvm::outs() << module;
-	die(""); */
 }
 
 llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 	// Check if block was already created
 	if (basic_blocks.count(pc))
 		return basic_blocks[pc];
-
-	//printf("jitting 0x%X\n", pc);
 
 	// PC in hex
 	ostringstream oss;

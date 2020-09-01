@@ -61,6 +61,8 @@ class Jitter {
 		std::unordered_map<vaddr_t, llvm::BasicBlock*> basic_blocks;
 		jit_block_t        result;
 
+		bool load_from_disk(const std::string& name);
+
 		llvm::Value* get_preg(uint8_t reg);
 		llvm::Value* get_reg(uint8_t reg);
 		void set_reg(uint8_t reg, llvm::Value* val);
