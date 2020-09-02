@@ -45,8 +45,13 @@ struct exit_info {
 	friend std::ostream& operator<<(std::ostream& os, const exit_info& exit_inf);
 };
 
-typedef void (*jit_block_t)(vm_state*, exit_info*, uint32_t*, uint32_t arr[][35]);
-typedef std::unordered_map<vaddr_t, jit_block_t> jit_cache_t;
+typedef uint64_t (*jit_block_t)(vm_state*, exit_info*, uint64_t, uint32_t arr[][35]);
+struct jit_cache_t {
+	// We use a vector instead of an unordered_map because accessing it is
+	// faster, but memory cost increases
+	std::mutex mtx;                 // mutex for jitting
+	std::vector<jit_block_t> cache; // indexed by vaddr
+};
 
 class Jitter;
 typedef bool (Jitter::*const inst_handler_jit_t)(vaddr_t, uint32_t);
@@ -61,6 +66,7 @@ class Jitter {
 		llvm::Module&      module;
 		llvm::IRBuilder<>  builder;
 		llvm::Function*    function;
+		llvm::Value*       p_instr;
 
 		// Map of created basic blocks. A basic block is not created if it
 		// is registered here. This way we avoid things like infinite recursion

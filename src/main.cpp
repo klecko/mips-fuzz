@@ -17,8 +17,9 @@ Adapt the elf parser to my code
 void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
 	uint32_t elapsed = 0;
-	double minstrps, fcps, reset_time, run_time, run_inst_time, inst_handl_time,
-	       fetch_inst_time, jump_time, bp_time, timeout_time, corpus_sz;
+	double minstrps, fcps, reset_time, run_time, inst_handl_time,
+	       fetch_inst_time, jump_time, bp_time, corpus_sz,
+	       jit_cache_time, vm_exit_time;
 	uint64_t cases, uniq_crashes, crashes, timeouts, cov, corpus_n;
 	while (true){
 		this_thread::sleep_for(chrono::seconds(1));
@@ -34,23 +35,26 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		timeouts        = stats.timeouts;
 		reset_time      = (double)stats.reset_cycles / stats.total_cycles;
 		run_time        = (double)stats.run_cycles / stats.total_cycles;
-		run_inst_time   = (double)stats.run_inst_cycles / stats.total_cycles;
 		inst_handl_time = (double)stats.inst_handl_cycles / stats.total_cycles;
 		fetch_inst_time = (double)stats.fetch_inst_cycles / stats.total_cycles;
 		jump_time       = (double)stats.jump_cycles / stats.total_cycles;
 		bp_time         = (double)stats.bp_cycles / stats.total_cycles;
-		timeout_time    = (double)stats.timeout_cycles / stats.total_cycles;
+		jit_cache_time  = (double)stats.jit_cache_cycles / stats.total_cycles;
+		vm_exit_time    = (double)stats.vm_exit_cycles / stats.total_cycles;
 		printf("[%u secs] cases: %lu, minstr/s: %.3f, fcps: %.3f, cov: %lu, "
 		       "corpus: %lu/%.3fKB, uniq crashes: %lu, crashes: %lu, "
-			   "timeouts: %lu\n",
-			   elapsed, cases, minstrps, fcps, cov, corpus_n, corpus_sz,
-			   uniq_crashes, crashes, timeouts);
+		       "timeouts: %lu\n",
+		       elapsed, cases, minstrps, fcps, cov, corpus_n, corpus_sz,
+		       uniq_crashes, crashes, timeouts);
 
-		if (!TIMETRACE) continue;
-		printf("\treset: %.3f, run: %.3f, run_inst: %.3f, inst_handl: %.3f, "
-				"fetch_inst: %.3f, jump: %.3f, bp: %.3f, timeout: %.3f\n",
-				reset_time, run_time, run_inst_time, inst_handl_time,
-				fetch_inst_time, jump_time, bp_time, timeout_time);
+		if (TIMETRACE >= 1)
+			printf("\treset: %.3f, run: %.3f\n", reset_time, run_time);
+
+		if (TIMETRACE >= 2)
+			printf("\tinst_handl: %.3f, fetch_inst: %.3f, jump: %.3f, bp: %.3f\n"
+			       "\tjit cache: %.3f, vm exit: %.3f\n",
+			       inst_handl_time, fetch_inst_time, jump_time, bp_time,
+			       jit_cache_time, vm_exit_time);
 	}
 }
 
@@ -63,7 +67,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 	uint32_t hash;
 	while (true){
 		Stats local_stats;
-		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid noping macro
+		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid macros
 
 		// Run some time saving stats in local_stats
 		while (_rdtsc() - cycles_init < 50000000){
@@ -77,7 +81,6 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			}
 			cov.vec.clear();
 
-			cycles = rdtsc(); // run_cycles
 			try {
 				//runner.run(input, cov, local_stats);
 				runner.run_jit(input, cov, jit_cache, local_stats);
@@ -91,19 +94,17 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 				cout << "TIMEOUT" << endl;
 				local_stats.timeouts++;
 			}
-			local_stats.run_cycles += rdtsc() - cycles;
 
 			local_stats.cases++;
 			//corpus.report_cov(id, cov);
 
+			cycles = rdtsc1(); // reset_cycles
+			runner.reset(parent);
+			local_stats.reset_cycles += rdtsc1() - cycles;
+
 			if (SINGLE_RUN)
 				die("end\n");
-
-			cycles = rdtsc(); // reset_cycles
-			runner.reset(parent);
-			local_stats.reset_cycles += rdtsc() - cycles;
 		}
-		//  _rdtsc() to avoid noping macro
 		local_stats.total_cycles = _rdtsc() - cycles_init;
 
 		// Update global stats
@@ -123,7 +124,7 @@ void create_folder(const char* name){
 }
 
 int main(){
-	const int num_threads = 1;//(DEBUG ? 1 : thread::hardware_concurrency());
+	const int num_threads = (DEBUG ? 1 : thread::hardware_concurrency());
 	cout << "Threads: " << num_threads << endl;
 
 	// Create crash folder
@@ -133,26 +134,29 @@ int main(){
 	// Create shared objects
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
-	jit_cache_t jit_cache;
 	Emulator emu(
 		8 * 1024 * 1024,                // memory
 		"../test_bins/test/test",       // path to elf
 		{"test", "input_file"}          // argv
 	);
+	jit_cache_t jit_cache = {
+		{},
+		vector<jit_block_t>(emu.memsize()),
+	};
 
 	// Run until open before forking
-	// test:    0x00423e8c | 0x41d6e4
+	// test:    0x00423e8c | 0x41d6e4 | 0x00423e7c
 	// xxd:     0x00429e6c
 	// readelf: 0x004c081c
-	/* try {
-		uint64_t insts = emu.run_until(0x004c081c);
+	try {
+		uint64_t insts = emu.run_until(0x00423e7c);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault runing before forking" << endl;
 		cout << "[PC: 0x" << hex << emu.get_prev_pc() << "] " << f << endl;
 		cout << emu << endl;
 		return -1;
-	} */
+	}
 
 	// Create worker threads and assign each to one core
 	cpu_set_t cpu;

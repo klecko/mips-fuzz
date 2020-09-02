@@ -229,25 +229,24 @@ void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
 void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	// Handle breakpoint. Record coverage if it changed pc, same as we do in
 	// branches
-	cycle_t cycles = rdtsc();
+	cycle_t cycles = rdtsc2();
 	if (breakpoints_bitmap[pc]){
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
 		(this->*breakpoints[pc])();
 		if (pc != pc_bf_bp)   // pc changed
 			add_coverage(cov, pc_bf_bp, pc);
 	}
-	local_stats.bp_cycles += rdtsc() - cycles;
+	local_stats.bp_cycles += rdtsc2() - cycles;
 
 	// Fetch current instruction
-	cycles = rdtsc();
+	cycles = rdtsc2();
 	uint32_t inst   = mmu.read_inst(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
-	local_stats.fetch_inst_cycles += rdtsc() - cycles;
-	//dbgprintf("[0x%X] Opcode: 0x%X, inst: 0x%X\n", pc, opcode, inst);
+	local_stats.fetch_inst_cycles += rdtsc2() - cycles;
 
 	// If needed, take the branch
 	// Otherwise, just increment PC so it points to the next instruction
-	cycles  = rdtsc();
+	cycles  = rdtsc2();
 	prev_pc = pc;
 	if (condition){
 		pc        = jump_addr;
@@ -260,13 +259,13 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 		add_coverage(cov, prev_pc, pc);
 		rec_cov = false;
 	}
-	local_stats.jump_cycles += rdtsc() - cycles;
+	local_stats.jump_cycles += rdtsc2() - cycles;
 
 	// Handle current instruction if it isn't a NOP
-	cycles = rdtsc();
+	cycles = rdtsc2();
 	if (inst)
 		(this->*inst_handlers[opcode])(inst);
-	local_stats.inst_handl_cycles += rdtsc() - cycles;
+	local_stats.inst_handl_cycles += rdtsc2() - cycles;
 }
 
 void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
@@ -279,19 +278,17 @@ void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 	uint64_t instr_exec = 0;
 	running = true;
 	cycle_t cycles;
+	cycles = rdtsc1(); // run_cycles
 	while (running){
-		cycles = rdtsc();
 		run_inst(cov, local_stats);
-		local_stats.run_inst_cycles += rdtsc() - cycles;
 		local_stats.instr += 1;
 
-		cycles = rdtsc();
 		instr_exec += 1;
 		if (instr_exec >= INSTR_TIMEOUT)
 			throw RunTimeout();
-		local_stats.timeout_cycles += rdtsc() - cycles;
 		//cout << *this << endl;
 	}
+	local_stats.run_cycles += rdtsc1() - cycles;
 }
 
 const char* regs_map[] = {
@@ -324,24 +321,34 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		&ccs,
 	};
 	exit_info exit_inf;
-	uint32_t num_inst = 0;
-	uint32_t regs_state[2000][35] = {{0}};
+	uint32_t regs_state[2000][35];
 
 	running = true;
 	jit_block_t jit_block;
+	cycle_t cycles;
 	while (running){
-		num_inst = 0;
-		//memset(regs_state, 0, sizeof(regs_state));
 		// Get the JIT block and run it
-		if (!jit_cache.count(pc))
-			jit_cache[pc] = Jitter(pc, mmu).get_result();
-		jit_block = jit_cache[pc];
-		//cout << *this << endl << endl;
-		jit_block(&state, &exit_inf, &num_inst, regs_state);
-		//cout << *this << endl;
-		//cout << exit_inf << endl;
+		cycles = rdtsc2(); // jit_cache_cycles
+		if (!jit_cache.cache[pc]){
+			// Writing to the cache is thread-safe because it is a vector, but
+			// it seems like LLVM jitting is not. Thus, we lock here so there's
+			// only one thread jitting at a time.
+			// It could happen that two or more threads wait to JIT the same pc.
+			// The second will load it from disk cache, so it is not a problem.
+			jit_cache.mtx.lock();
+			jit_cache.cache[pc] = Jitter(pc, mmu).get_result();
+			jit_cache.mtx.unlock();
+		}
+		jit_block = jit_cache.cache[pc];
+		local_stats.jit_cache_cycles += rdtsc2() - cycles;
+
+		cycles = rdtsc1(); // run_cycles
+		local_stats.instr +=
+			jit_block(&state, &exit_inf, (uint64_t)0, regs_state);
+		local_stats.run_cycles += rdtsc1() - cycles;
 
 		// Handle the vm exit
+		cycles = rdtsc2(); // vm_exit_cycles
 		switch (exit_inf.reason){
 			case exit_info::ExitReason::IndirectBranch:
 				break;
@@ -362,6 +369,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 			default:
 				die("Unknown exit reason: %d\n", exit_inf.reason);
 		}
+		local_stats.vm_exit_cycles += rdtsc2() - cycles;
 		pc = exit_inf.reenter_pc;
 		prev_pc = pc; // not sure about this, we'll see
 		/* 

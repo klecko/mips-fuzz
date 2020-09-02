@@ -39,7 +39,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	p_module(new llvm::Module("module", *p_context)),
 	context(*p_context), module(*p_module), builder(context)
 {
-	thread_local jit_init init; // static?
+	static jit_init init; // thread_local?
 
 	// Get function name
 	ostringstream oss;
@@ -65,6 +65,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	int32ptr_ty  = llvm::Type::getInt32PtrTy(context);
 	floatptr_ty  = llvm::Type::getFloatPtrTy(context);
 
+	// Get function arguments types
 	llvm::Type* vm_state_ty = llvm::StructType::get(context,
 		{
 			int32ptr_ty, // regs
@@ -91,7 +92,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 
 	// Create function
 	llvm::FunctionType* function_type = llvm::FunctionType::get(
-		void_ty,          // ret
+		int64_ty,         // ret: number of instructions executed
 		{p_vm_state_ty, p_exit_info_ty, int32ptr_ty, int32ptr_ty}, // args
 		false             // varargs
 	);
@@ -102,9 +103,14 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 		module
 	);
 
-	// Create entry basic block
+	// Create entry basic block. Allocate stack for counting number of
+	// instructions, which will be returned by the function. With optimization
+	// passes this turns into returning a constant, so it's free.
 	llvm::BasicBlock* entry_block =
 		llvm::BasicBlock::Create(context, "entry", function);
+	builder.SetInsertPoint(entry_block);
+	p_instr = builder.CreateAlloca(int64_ty);
+	builder.CreateStore(builder.getInt64(0), p_instr);
 
 	// Create basic blocks recursively
 	llvm::BasicBlock* bb = create_block(pc);
@@ -148,8 +154,8 @@ bool Jitter::load_from_disk(const string& name){
 	}
 
 	// Create execution engine, add object file and get pointer to function.
-	// Unlike in compile(), here we don't JIT because we are adding an object
-	// which is already compiled
+	// Unlike in compile(), here we are not jitting because we are adding an
+	// object which is already compiled
 	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module))
 		.setEngineKind(llvm::EngineKind::JIT)
 		.create();
@@ -334,7 +340,7 @@ void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 	builder.CreateStore(reenter_pc, p_pc);
 	builder.CreateStore(info1 ? info1 : builder.getInt32(0), p_info1);
 	builder.CreateStore(info2 ? info2 : builder.getInt32(0), p_info2);
-	builder.CreateRetVoid();
+	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
 
 void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
@@ -669,6 +675,11 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 }
 
 bool Jitter::handle_inst(vaddr_t pc){
+	// Increment instruction count
+	llvm::Value* instr     = builder.CreateLoad(p_instr, "instr");
+	llvm::Value* instr_inc = builder.CreateAdd(instr, builder.getInt64(1));
+	builder.CreateStore(instr_inc, p_instr);
+
 	// Fetch current instruction
 	uint32_t inst   = mmu.read_inst(pc);
 	uint8_t  opcode = (inst >> 26) & 0b111111;
