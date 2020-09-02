@@ -5,7 +5,6 @@
 #include "mmu.h"
 #include "file.h"
 #include "stats.h"
-#include "jit_cache.h"
 #include "jitter.h"
 #include "common.h"
 
