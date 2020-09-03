@@ -46,7 +46,6 @@ Corpus::Corpus(int nthreads, const string& path){
 	closedir(dir);
 
 	lock_corpus.clear();
-	lock_recorded_cov.clear();
 	lock_uniq_crashes.clear();
 
 	if (corpus.size() == 0)
@@ -65,10 +64,6 @@ size_t Corpus::memsize() const {
 	return sz;
 }
 
-size_t Corpus::cov_size() const {
-	return recorded_cov.size();
-}
-
 size_t Corpus::uniq_crashes_size() const {
 	return uniq_crashes.size();
 }
@@ -79,7 +74,7 @@ void Corpus::mutate_input(int id, Rng& rng){
 		input[rng.rnd() % input.size()] = rng.rnd() % 0xFF;
 }
 
-void Corpus::add_input(const std::string& new_input){
+void Corpus::add_input(const string& new_input){
 	while (lock_corpus.test_and_set());
 	corpus.push_back(new_input);
 	lock_corpus.clear();
@@ -92,16 +87,9 @@ const std::string& Corpus::get_new_input(int id, Rng& rng){
 	return mutated_inputs[id];
 }
 
-void Corpus::report_cov(int id, const cov_t& cov){
-	while (lock_recorded_cov.test_and_set());
-	if (!recorded_cov.count(cov.vec)){
-		// New coverage, save it and add associated input to corpus
-		recorded_cov[cov.vec] = true;
-		add_input(mutated_inputs[id]);
-		/*for (const auto& jump : cov.vec)
-			printf("0x%X --> 0x%X\n", jump.first, jump.second);*/
-	}
-	lock_recorded_cov.clear();
+void Corpus::report_new_cov(int id){
+	// New coverage, save it and add associated input to corpus
+	add_input(mutated_inputs[id]);
 }
 
 void Corpus::report_crash(int id, vaddr_t pc, const Fault& fault){

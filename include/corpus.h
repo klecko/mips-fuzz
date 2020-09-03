@@ -28,23 +28,6 @@ class Rng {
 		}
 };
 
-
-
-// Coverage hasher
-struct cov_hasher {
-	std::size_t operator()(const cov_vec_t& c) const{
-		std::size_t hash = c.size();
-		for (const auto& jump : c){
-			hash ^= jump.first  + (hash << 6) + (hash >> 2);
-			hash ^= jump.second + (hash << 6) + (hash >> 2);
-		}
-		return hash;
-	}
-};
-
-// Type used for storing recorded coverage across runs
-typedef std::unordered_map<cov_vec_t, bool, cov_hasher> recorded_cov_t;
-
 // Type used for storing unique crashes. May be changed by a hash table
 typedef std::vector<std::pair<vaddr_t, Fault>> crashes_t;
 
@@ -58,10 +41,6 @@ class Corpus {
 
 		// Vector with one mutated input for each thread
 		std::vector<std::string> mutated_inputs;
-
-		// Data structure for storing recorded coverage across runs and its lock
-		recorded_cov_t recorded_cov;
-		std::atomic_flag lock_recorded_cov;
 
 		// Data structure for storing unique crashes and its lock
 		crashes_t uniq_crashes;
@@ -78,16 +57,14 @@ class Corpus {
 
 		size_t size() const;
 		size_t memsize() const;
-		size_t cov_size() const;
 		size_t uniq_crashes_size() const;
 
 		// Get a new mutated input, which will be a constant reference to
 		// `mutated_inputs[id]`
 		const std::string& get_new_input(int id, Rng& rng);
 
-		// Report coverage. If it is new, save it and add the corresponding
-		// input to the corpus
-		void report_cov(int id, const cov_t& cov);
+		// Report new coverage: save corresponding input into corpus
+		void report_new_cov(int id);
 
 		// Report a crash. If it is new, save it and write its associated input 
 		// to disk

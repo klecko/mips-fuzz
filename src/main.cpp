@@ -27,7 +27,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		cases           = stats.cases;
 		minstrps        = (double)stats.instr / (elapsed * 1000000);
 		fcps            = (double)cases / elapsed;
-		cov             = corpus.cov_size();
+		cov             = stats.cov;
 		corpus_n        = corpus.size();
 		corpus_sz       = (double)corpus.memsize() / 1024;
 		uniq_crashes    = corpus.uniq_crashes_size();
@@ -59,12 +59,11 @@ void print_stats(Stats& stats, const Corpus& corpus){
 }
 
 void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
-            jit_cache_t& jit_cache, Stats& stats)
+            cov_t& cov, jit_cache_t& jit_cache, Stats& stats)
 {
 	Rng rng;
 	cycle_t cycles_init, cycles;
-	cov_t cov = { vector<bool>(runner.memsize(), 0) };
-	uint32_t hash;
+	uint32_t new_cov;
 	while (true){
 		Stats local_stats;
 		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid macros
@@ -75,15 +74,11 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			const string& input = corpus.get_new_input(id, rng);
 
 			// Clear coverage
-			for (const auto& jump : cov.vec){
-				hash = branch_hash(jump.first, jump.second) % cov.bitmap.size();
-				cov.bitmap[hash] = 0;
-			}
-			cov.vec.clear();
+			new_cov = 0;
 
 			try {
-				//runner.run(input, cov, local_stats);
-				runner.run_jit(input, cov, jit_cache, local_stats);
+				runner.run(input, cov, new_cov, local_stats);
+				//runner.run_jit(input, cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
@@ -96,7 +91,10 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			}
 
 			local_stats.cases++;
-			//corpus.report_cov(id, cov);
+			if (new_cov){
+				corpus.report_new_cov(id);
+				local_stats.cov += new_cov;
+			}
 
 			cycles = rdtsc1(); // reset_cycles
 			runner.reset(parent);
@@ -143,13 +141,14 @@ int main(){
 		{},
 		vector<jit_block_t>(emu.memsize()),
 	};
+	cov_t cov(emu.memsize());
 
 	// Run until open before forking
 	// test:    0x00423e8c | 0x41d6e4 | 0x00423e7c
 	// xxd:     0x00429e6c
 	// readelf: 0x004c081c
 	try {
-		uint64_t insts = emu.run_until(0x00423e7c);
+		uint64_t insts = emu.run_until(0x00423ec8);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault runing before forking" << endl;
@@ -163,7 +162,7 @@ int main(){
 	vector<thread> threads;
 	for (int i = 0; i < num_threads; i++){
 		thread t = thread(worker, i, emu.fork(), ref(emu), ref(corpus),
-		                  ref(jit_cache), ref(stats));
+		                  ref(cov), ref(jit_cache), ref(stats));
 		CPU_ZERO(&cpu);
 		CPU_SET(i, &cpu);
 		if (pthread_setaffinity_np(t.native_handle(), sizeof(cpu), &cpu) != 0)

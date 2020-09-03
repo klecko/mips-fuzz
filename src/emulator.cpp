@@ -217,24 +217,21 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 	dbgprintf("set breakpoint %s at 0x%lX\n", symbol_name.c_str(), it->symbol_value);
 }
 
-void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
-	// If given branch has not been seen yet, add it to the coverage
-	uint32_t hash = branch_hash(from, to) % cov.bitmap.size();
-	if (!cov.bitmap[hash]){
-		cov.bitmap[hash] = true;
-		cov.vec.push_back(make_pair(from, to));
-	}
+bool add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
+	// Mark branch as seen and return true if it had not been seen before
+	uint32_t hash = branch_hash(from, to)  % cov.size();
+	return !__atomic_test_and_set(&cov[hash], __ATOMIC_SEQ_CST);
 }
 
-void Emulator::run_inst(cov_t& cov, Stats& local_stats){
+void Emulator::run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats){
 	// Handle breakpoint. Record coverage if it changed pc, same as we do in
 	// branches
 	cycle_t cycles = rdtsc2();
 	if (breakpoints_bitmap[pc]){
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
 		(this->*breakpoints[pc])();
-		if (pc != pc_bf_bp)   // pc changed
-			add_coverage(cov, pc_bf_bp, pc);
+		if (pc != pc_bf_bp)    // pc changed
+			new_cov += add_coverage(cov, pc_bf_bp, pc);
 	}
 	local_stats.bp_cycles += rdtsc2() - cycles;
 
@@ -256,7 +253,7 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 
 	// No matter if the branch was taken or not, record coverage
 	if (rec_cov){
-		add_coverage(cov, prev_pc, pc);
+		new_cov += add_coverage(cov, prev_pc, pc);
 		rec_cov = false;
 	}
 	local_stats.jump_cycles += rdtsc2() - cycles;
@@ -268,7 +265,9 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	local_stats.inst_handl_cycles += rdtsc2() - cycles;
 }
 
-void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
+void Emulator::run(const string& input, cov_t& cov, uint32_t& new_cov,
+                   Stats& local_stats)
+{
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
 	this->input    = input.c_str();
@@ -277,10 +276,9 @@ void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 	// Perform execution recording number of executed instructions
 	uint64_t instr_exec = 0;
 	running = true;
-	cycle_t cycles;
-	cycles = rdtsc1(); // run_cycles
+	cycle_t cycles = rdtsc1(); // run_cycles
 	while (running){
-		run_inst(cov, local_stats);
+		run_inst(cov, new_cov, local_stats);
 		local_stats.instr += 1;
 
 		instr_exec += 1;
@@ -391,14 +389,15 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 }
 
 uint64_t Emulator::run_until(vaddr_t pc){
-	Stats dummy;
-	cov_t dummy2 = { vector<bool>(memsize(), 0) };
+	cov_t dummy = { vector<uint8_t>(memsize(), 0) };
+	uint32_t dummy2;
+	Stats dummy3;
 	while (this->pc != pc){
-		run_inst(dummy2, dummy);
-		dummy.instr++;
+		run_inst(dummy, dummy2, dummy3);
+		dummy3.instr++;
 		//cout << *this << endl;
 	}
-	return dummy.instr;
+	return dummy3.instr;
 }
 
 void Emulator::test_bp(){
