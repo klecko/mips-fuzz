@@ -61,9 +61,17 @@ void print_stats(Stats& stats, const Corpus& corpus){
 void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
             cov_t& cov, jit_cache_t& jit_cache, Stats& stats)
 {
+	// Custom RNG: avoids locks and simpler
 	Rng rng;
+
+	// Timetracing
 	cycle_t cycles_init, cycles;
+
+	// Number of new discovered branches in current run. If any, we'll report
+	// new coverage to corpus.
 	uint32_t new_cov;
+
+	// Main loop
 	while (true){
 		Stats local_stats;
 		cycles_init = _rdtsc(); // total_cycles, _rdtsc() to avoid macros
@@ -77,8 +85,8 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			new_cov = 0;
 
 			try {
-				runner.run(input, cov, new_cov, local_stats);
-				//runner.run_jit(input, cov, jit_cache, local_stats);
+				//runner.run(input, cov, new_cov, local_stats);
+				runner.run_jit(input, cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;

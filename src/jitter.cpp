@@ -320,26 +320,33 @@ void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		},
 		"p_pc"
 	);
-	llvm::Value* p_info1 = builder.CreateInBoundsGEP(
-		p_exit_info,
-		{
-			builder.getInt32(0),
-			builder.getInt32(2),
-		},
-		"p_info1_"
-	);
-	llvm::Value* p_info2 = builder.CreateInBoundsGEP(
-		p_exit_info,
-		{
-			builder.getInt32(0),
-			builder.getInt32(3),
-		},
-		"p_info2_"
-	);
 	builder.CreateStore(builder.getInt32(reason), p_exit_reason);
 	builder.CreateStore(reenter_pc, p_pc);
-	builder.CreateStore(info1 ? info1 : builder.getInt32(0), p_info1);
-	builder.CreateStore(info2 ? info2 : builder.getInt32(0), p_info2);
+
+	// Store only info1 and info2 if they are provided
+	if (info1){
+		llvm::Value* p_info1 = builder.CreateInBoundsGEP(
+			p_exit_info,
+			{
+				builder.getInt32(0),
+				builder.getInt32(2),
+			},
+			"p_info1_"
+		);
+		builder.CreateStore(info1 ? info1 : builder.getInt32(0), p_info1);
+	}
+
+	if (info2){
+		llvm::Value* p_info2 = builder.CreateInBoundsGEP(
+			p_exit_info,
+			{
+				builder.getInt32(0),
+				builder.getInt32(3),
+			},
+			"p_info2_"
+		);
+		builder.CreateStore(info2 ? info2 : builder.getInt32(0), p_info2);
+	}
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
 
@@ -741,11 +748,13 @@ bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
 	set_reg(Reg::ra, pc+4);
 	handle_inst(pc);
 
-	// Create both blocks, branch and finish compilation
-	llvm::BasicBlock* true_block  = create_block(jump_addr);
-	llvm::BasicBlock* false_block = create_block(pc+4);
-
-	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
+	// This jump is a call: finish compilation
+	llvm::Value* reenter_pc = builder.CreateSelect(
+		cmp,
+		builder.getInt32(jump_addr),
+		builder.getInt32(pc+4)
+	);
+	gen_vm_exit(exit_info::ExitReason::IndirectBranch, reenter_pc);
 	return true;
 }
 
@@ -888,13 +897,7 @@ bool Jitter::inst_xor(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_sltu(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* cmp = builder.CreateICmpULT(get_reg(inst.s), get_reg(inst.t), "SLTU");
-	/* llvm::Value* sel = builder.CreateSelect(
-		cmp,
-		llvm::ConstantInt::get(context, llvm::APInt(32, 1)),
-		builder.getInt32(0)
-	);
-	set_reg(inst.d, sel); */
+	llvm::Value* cmp = builder.CreateICmpULT(get_reg(inst.s), get_reg(inst.t));
 	set_reg(inst.d, cmp);
 	return false;
 }
@@ -903,18 +906,12 @@ bool Jitter::inst_sltiu(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* value = builder.getInt32((int16_t)inst.C);
 	llvm::Value* cmp = builder.CreateICmpULT(get_reg(inst.s), value);
-	/* llvm::Value* sel = builder.CreateSelect(
-		cmp,
-		llvm::ConstantInt::get(context, llvm::APInt(32, 1)),
-		builder.getInt32(0)
-	);
-	set_reg(inst.t, sel); */
 	set_reg(inst.t, cmp);
 	return false;
 }
 
 bool Jitter::inst_movn(vaddr_t pc, uint32_t val){
-	// Hope this shit gets optimized
+	// Hope this shit gets optimized: `rd = (rt != 0 ? rs : rd)`
 	inst_R_t inst(val);
 	llvm::Value* cmp = builder.CreateICmpNE(
 		get_reg(inst.t),
@@ -930,7 +927,7 @@ bool Jitter::inst_movn(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_movz(vaddr_t pc, uint32_t val){
-	// Hope this shit gets optimized
+	// Hope this shit gets optimized: `rd = (rt == 0 ? rs : rd)`
 	inst_R_t inst(val);
 	llvm::Value* cmp = builder.CreateICmpEQ(
 		get_reg(inst.t),
@@ -1109,10 +1106,9 @@ bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
 	// Handle delay slot
 	handle_inst(pc);
 
-	// Create block, branch and finish compilation
-	llvm::BasicBlock* true_block = create_block(jump_addr);
-
-	builder.Insert(llvm::BranchInst::Create(true_block));
+	// This jump is a call: finish compilation
+	gen_vm_exit(exit_info::ExitReason::IndirectBranch,
+				builder.getInt32(jump_addr));
 	return true;
 }
 
@@ -1346,12 +1342,6 @@ bool Jitter::inst_slt(vaddr_t pc, uint32_t val){
 		get_reg(inst.s),
 		get_reg(inst.t)
 	);
-	/* llvm::Value* sel = builder.CreateSelect(
-		cmp,
-		llvm::ConstantInt::get(context, llvm::APInt(32, 1)),
-		builder.getInt32(0)
-	);
-	set_reg(inst.t, sel); */
 	set_reg(inst.d, cmp);
 	return false;
 }
@@ -1372,10 +1362,10 @@ bool Jitter::inst_j(vaddr_t pc, uint32_t val){
 	vaddr_t jump_addr = (inst.A << 2) | (pc & 0xF0000000);
 	handle_inst(pc);
 
-	// Create block, branch and finish compilation
-	llvm::BasicBlock* true_block = create_block(jump_addr);
-
-	builder.Insert(llvm::BranchInst::Create(true_block));
+	// This jump is a call: finish compilation.
+	// It seems to be used as a tail call or as a call with no return
+	gen_vm_exit(exit_info::ExitReason::IndirectBranch,
+				builder.getInt32(jump_addr));
 	return true;
 }
 
