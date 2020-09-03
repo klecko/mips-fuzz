@@ -45,7 +45,13 @@ struct exit_info {
 	friend std::ostream& operator<<(std::ostream& os, const exit_info& exit_inf);
 };
 
-typedef uint64_t (*jit_block_t)(vm_state*, exit_info*, uint64_t, uint32_t arr[][35]);
+typedef uint64_t (*jit_block_t)(
+	vm_state*  p_vm_state,
+	exit_info* p_exit_info,
+	uint8_t*   cov_map,
+	uint32_t*  p_new_cov
+);
+
 struct jit_cache_t {
 	// We use a vector instead of an unordered_map because accessing it is
 	// faster, but memory cost increases
@@ -98,6 +104,8 @@ class Jitter {
 		// Generate vm exit with given information
 		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		                 llvm::Value* info1=NULL, llvm::Value* info2=NULL);
+
+		void gen_add_coverage(llvm::Value* from, llvm::Value* to);
 
 		// Generation of memory access checks. We also generate a fault vm exit
 		// so faults are notified at runtime if any check fails.

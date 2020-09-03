@@ -14,9 +14,12 @@
 #include "jitter.h"
 #include "inst_decoding.h"
 
+#define COVERAGE_ATTEMPT 0
+
 using namespace std;
 
 llvm::Type* void_ty;
+llvm::Type* int1_ty;
 llvm::Type* int8_ty;
 llvm::Type* int16_ty;
 llvm::Type* int32_ty;
@@ -56,6 +59,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 
 	// Get types
 	void_ty      = llvm::Type::getVoidTy(context);
+	int1_ty      = llvm::Type::getInt1Ty(context);
 	int8_ty      = llvm::Type::getInt8Ty(context);
 	int16_ty     = llvm::Type::getInt16Ty(context);
 	int32_ty     = llvm::Type::getInt32Ty(context);
@@ -92,9 +96,14 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 
 	// Create function
 	llvm::FunctionType* function_type = llvm::FunctionType::get(
-		int64_ty,         // ret: number of instructions executed
-		{p_vm_state_ty, p_exit_info_ty, int32ptr_ty, int32ptr_ty}, // args
-		false             // varargs
+		int64_ty,           // ret: number of instructions executed
+		{
+			p_vm_state_ty,  // p_vm_state
+			p_exit_info_ty, // p_exit_info
+			int8ptr_ty,     // cov_map
+			int32ptr_ty     // p_new_cov
+		},
+		false               // varargs
 	);
 	function = llvm::Function::Create(
 		function_type,
@@ -348,6 +357,40 @@ void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		builder.CreateStore(info2 ? info2 : builder.getInt32(0), p_info2);
 	}
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
+}
+
+void Jitter::gen_add_coverage(llvm::Value* from, llvm::Value* to){
+	// Compute branch hash
+	llvm::Value* tmp1 = builder.CreateShl (from, builder.getInt32(6));
+	llvm::Value* tmp2 = builder.CreateLShr(from, builder.getInt32(2));
+	llvm::Value* tmp3 = builder.CreateAdd(builder.CreateAdd(to, tmp1), tmp2);
+	llvm::Value* tmp4 = builder.CreateXor(from, tmp3);
+	llvm::Value* cov_map_size = builder.getInt32(mmu.size());
+	llvm::Value* branch_hash =
+		builder.CreateURem(tmp4, cov_map_size, "branch_hash");
+		//builder.CreateAnd(tmp4, builder.CreateSub(cov_map_size, builder.getInt32(1)));
+
+	// Test and set the corresponding byte in cov_map
+	llvm::Value* cov_map     = &function->arg_begin()[2];
+	llvm::Value* p_cov_value = builder.CreateInBoundsGEP(cov_map, branch_hash,
+	                                                     "p_cov_value");
+	llvm::Value* old = builder.CreateAtomicRMW(
+		llvm::AtomicRMWInst::BinOp::Xchg,
+		p_cov_value,
+		builder.getInt8(1),
+		llvm::AtomicOrdering::SequentiallyConsistent
+	);
+	llvm::Value* old_was_zero = builder.CreateICmpEQ(old, builder.getInt8(0));
+
+	// Increment new_cov if old was zero
+	llvm::Value* p_new_cov   = &function->arg_begin()[3];
+	llvm::Value* new_cov     = builder.CreateLoad(p_new_cov, "new_cov");
+	llvm::Value* new_cov_inc = builder.CreateAdd(
+		new_cov,
+		builder.CreateZExt(old_was_zero, int32_ty),
+		"new_cov_inc"
+	);
+	builder.CreateStore(new_cov_inc, p_new_cov);
 }
 
 void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
@@ -748,6 +791,15 @@ bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
 	set_reg(Reg::ra, pc+4);
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		llvm::Value* cov_addr = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		gen_add_coverage(builder.getInt32(pc), cov_addr);
+	}
 	// This jump is a call: finish compilation
 	llvm::Value* reenter_pc = builder.CreateSelect(
 		cmp,
@@ -806,6 +858,11 @@ bool Jitter::inst_jalr(vaddr_t pc, uint32_t val){
 	// Handle delay slot
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		gen_add_coverage(builder.getInt32(pc), jump_addr);
+	}
+
 	// Generate indirect branch and finish compilation
 	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
 	return true;
@@ -822,6 +879,15 @@ bool Jitter::inst_beq(vaddr_t pc, uint32_t val){
 	);
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		llvm::Value* cov_addr = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		gen_add_coverage(builder.getInt32(pc), cov_addr);
+	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
 	llvm::BasicBlock* false_block = create_block(pc+4);
@@ -854,6 +920,15 @@ bool Jitter::inst_bne(vaddr_t pc, uint32_t val){
 	);
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		llvm::Value* cov_addr = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		gen_add_coverage(builder.getInt32(pc), cov_addr);
+	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
 	llvm::BasicBlock* false_block = create_block(pc+4);
@@ -868,6 +943,11 @@ bool Jitter::inst_jr(vaddr_t pc, uint32_t val){
 
 	// Handle delay slot first
 	handle_inst(pc);
+
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		gen_add_coverage(builder.getInt32(pc), jump_addr);
+	}
 
 	// Generate indirect branch and finish compilation
 	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
@@ -1006,6 +1086,15 @@ bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
 	);
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		llvm::Value* cov_addr = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		gen_add_coverage(builder.getInt32(pc), cov_addr);
+	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
 	llvm::BasicBlock* false_block = create_block(pc+4);
@@ -1025,6 +1114,15 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 	);
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		llvm::Value* cov_addr = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		gen_add_coverage(builder.getInt32(pc), cov_addr);
+	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
 	llvm::BasicBlock* false_block = create_block(pc+4);
@@ -1056,6 +1154,15 @@ bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
 	);
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		llvm::Value* cov_addr = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		gen_add_coverage(builder.getInt32(pc), cov_addr);
+	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
 	llvm::BasicBlock* false_block = create_block(pc+4);
@@ -1100,15 +1207,19 @@ bool Jitter::inst_pref(vaddr_t pc, uint32_t val){
 bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
 	// Calculate jump addr and set return address
 	inst_J_t inst(val);
-	vaddr_t jump_addr = (inst.A << 2) | (pc & 0xF0000000);
+	llvm::Value* jump_addr = builder.getInt32((inst.A << 2)|(pc & 0xF0000000));
 	set_reg(Reg::ra, pc+4);
 
 	// Handle delay slot
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		gen_add_coverage(builder.getInt32(pc), jump_addr);
+	}
+
 	// This jump is a call: finish compilation
-	gen_vm_exit(exit_info::ExitReason::IndirectBranch,
-				builder.getInt32(jump_addr));
+	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
 	return true;
 }
 
@@ -1359,13 +1470,17 @@ bool Jitter::inst_add(vaddr_t pc, uint32_t val){
 bool Jitter::inst_j(vaddr_t pc, uint32_t val){
 	// Calculate jump address and handle delay slot
 	inst_J_t inst(val);
-	vaddr_t jump_addr = (inst.A << 2) | (pc & 0xF0000000);
+	llvm::Value* jump_addr = builder.getInt32((inst.A << 2)|(pc & 0xF0000000));
 	handle_inst(pc);
+
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		gen_add_coverage(builder.getInt32(pc), jump_addr);
+	}
 
 	// This jump is a call: finish compilation.
 	// It seems to be used as a tail call or as a call with no return
-	gen_vm_exit(exit_info::ExitReason::IndirectBranch,
-				builder.getInt32(jump_addr));
+	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
 	return true;
 }
 
@@ -1399,6 +1514,15 @@ bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
 	);
 	handle_inst(pc);
 
+	// Record coverage
+	if (COVERAGE_ATTEMPT){
+		llvm::Value* cov_addr = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		gen_add_coverage(builder.getInt32(pc), cov_addr);
+	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
 	llvm::BasicBlock* false_block = create_block(pc+4);

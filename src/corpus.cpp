@@ -70,6 +70,8 @@ size_t Corpus::uniq_crashes_size() const {
 
 void Corpus::mutate_input(int id, Rng& rng){
 	string& input = mutated_inputs[id];
+	if (input.size() == 0)
+		die("ZERO LENGTH INPUT\n");
 	for (int i = 0; i < MUTATED_BYTES; i++)
 		input[rng.rnd() % input.size()] = rng.rnd() % 0xFF;
 }
@@ -81,8 +83,10 @@ void Corpus::add_input(const string& new_input){
 }
 
 const std::string& Corpus::get_new_input(int id, Rng& rng){
-	// Copy a random input and mutate it. Is a lock necessary here? shared_mutex
+	// Copy a random input and mutate it
+	while (lock_corpus.test_and_set());
 	mutated_inputs[id] = corpus[rng.rnd() % corpus.size()];
+	lock_corpus.clear();
 	mutate_input(id, rng);
 	return mutated_inputs[id];
 }

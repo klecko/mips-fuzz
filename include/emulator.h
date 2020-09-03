@@ -165,8 +165,8 @@ class Emulator {
 		void run(const std::string& input, cov_t& cov, uint32_t& new_cov,
 		         Stats& local_stats);
 
-		void run_jit(const std::string& input, cov_t& cov, jit_cache_t& jit_cache,
-		             Stats& local_stats);
+		void run_jit(const std::string& input, cov_t& cov, uint32_t& new_cov,
+		             jit_cache_t& jit_cache, Stats& local_stats);
 
 		// Run emulator until given address, return the number of instructions
 		// executed

@@ -86,7 +86,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 
 			try {
 				//runner.run(input, cov, new_cov, local_stats);
-				runner.run_jit(input, cov, jit_cache, local_stats);
+				runner.run_jit(input, cov, new_cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;

@@ -300,14 +300,15 @@ const char* regs_map[] = {
 	"gp", "sp", "fp", "ra",
 	"hi", "lo"
 };
-void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
-                       Stats& local_stats)
+void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
+                       jit_cache_t& jit_cache, Stats& local_stats)
 {
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
 	this->input    = input.c_str();
 	this->input_sz = input.size();
 
+	// JIT block arguments
 	vm_state state = {
 		regs,
 		mmu.get_memory(),
@@ -319,7 +320,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		&ccs,
 	};
 	exit_info exit_inf;
-	uint32_t regs_state[2000][35];
+	//uint32_t regs_state[2000][35];
 
 	running = true;
 	jit_block_t jit_block;
@@ -342,7 +343,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 
 		cycles = rdtsc1(); // run_cycles
 		local_stats.instr +=
-			jit_block(&state, &exit_inf, (uint64_t)0, regs_state);
+			jit_block(&state, &exit_inf, cov.data(), &new_cov);
 		local_stats.run_cycles += rdtsc1() - cycles;
 
 		// Handle the vm exit
