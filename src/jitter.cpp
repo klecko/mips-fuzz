@@ -121,6 +121,18 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	p_instr = builder.CreateAlloca(int64_ty);
 	builder.CreateStore(builder.getInt64(0), p_instr);
 
+	// Load state
+	state = {
+		get_state_field(0, "p_regs"),
+		get_state_field(1, "p_memory"),
+		get_state_field(2, "p_perms"),
+		get_state_field(3, "p_dirty_vec"),
+		get_state_field(4, "p_dirty_size"),
+		get_state_field(5, "p_dirty_map"),
+		get_state_field(6, "p_fpregs"),
+		get_state_field(7, "p_ccs"),
+	};
+
 	// Create basic blocks recursively
 	llvm::BasicBlock* bb = create_block(pc);
 
@@ -261,9 +273,8 @@ llvm::Value* Jitter::get_state_field(uint8_t field, const string& name){
 llvm::Value* Jitter::get_preg(uint8_t reg){
 	// Get pointer to regs[reg]
 	assert(1 <= reg && reg <= 33); // 0 is reg zero
-	llvm::Value* p_regs = get_state_field(0, "p_regs");
 	llvm::Value* p_reg  = builder.CreateInBoundsGEP(
-		p_regs,
+		state.p_regs,
 		builder.getInt32(reg),
 		"p_reg" + to_string(reg) + "_"
 	);
@@ -299,10 +310,9 @@ void Jitter::set_reg(uint8_t reg, uint32_t val){
 
 llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
 	// Get pointer to memory[addr]
-	llvm::Value* p_memory = get_state_field(1, "p_memory");
 	llvm::Value* p_value = builder.CreateInBoundsGEP(
-		p_memory,
-		{ addr },
+		state.p_memory,
+		addr,
 		"p_value"
 	);
 	return p_value;
@@ -474,9 +484,8 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 		llvm::BasicBlock::Create(context, "nofault_perms", function);
 
 	// Get pointer to permissions value, cast it and load its value
-	llvm::Value* p_perms = get_state_field(2, "p_perms");
 	llvm::Value* p_perm  = builder.CreateInBoundsGEP(
-		p_perms,
+		state.p_perms,
 		addr,
 		"p_perm"
 	);
@@ -621,9 +630,6 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 		builder.getInt32(1),
 		"block_end"
 	);
-	llvm::Value* p_dirty_vec  = get_state_field(3, "p_dirty_vec");
-	llvm::Value* p_dirty_size = get_state_field(4, "p_dirty_size");
-	llvm::Value* p_dirty_map  = get_state_field(5, "p_dirty_map");
 	builder.CreateBr(for_body);
 
 	// For body. Load dirty value and branch
@@ -631,7 +637,7 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	llvm::PHINode* block = builder.CreatePHI(int32_ty, 2, "block");
 	block->addIncoming(block_begin, prev_bb);
 	llvm::Value* p_dirty_value =
-		builder.CreateInBoundsGEP(p_dirty_map, block, "p_dirty_value");
+		builder.CreateInBoundsGEP(state.p_dirty_map, block, "p_dirty_value");
 	llvm::Value* dirty_value = builder.CreateLoad(p_dirty_value, "dirty_value");
 	llvm::Value* cmp_dirty = 
 		builder.CreateICmpEQ(dirty_value, builder.getInt8(0), "cmp_dirty");
@@ -642,10 +648,11 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	// add it to the vector.
 	builder.SetInsertPoint(for_register_dirty);
 	builder.CreateStore(builder.getInt8(1), p_dirty_value);
-	llvm::Value* dirty_size = builder.CreateLoad(p_dirty_size, "dirty_size");
-	builder.CreateStore(block, builder.CreateInBoundsGEP(p_dirty_vec, dirty_size));
+	llvm::Value* dirty_size = builder.CreateLoad(state.p_dirty_size, "dirty_size");
+	builder.CreateStore(block, 
+		builder.CreateInBoundsGEP(state.p_dirty_vec, dirty_size));
 	builder.CreateStore(builder.CreateAdd(dirty_size, builder.getInt32(1)),
-	                    p_dirty_size);
+	                    state.p_dirty_size);
 	builder.CreateBr(for_cond);
 
 	// For cond, increment block and check end condition.

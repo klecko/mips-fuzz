@@ -74,6 +74,17 @@ class Jitter {
 		llvm::Function*    function;
 		llvm::Value*       p_instr;
 
+		struct {
+			llvm::Value* p_regs;
+			llvm::Value* p_memory;
+			llvm::Value* p_perms;
+			llvm::Value* p_dirty_vec;
+			llvm::Value* p_dirty_size;
+			llvm::Value* p_dirty_map;
+			llvm::Value* p_fpregs;
+			llvm::Value* p_ccs;
+		} state;
+
 		// Map of created basic blocks. A basic block is not created if it
 		// is registered here. This way we avoid things like infinite recursion
 		// in loops
