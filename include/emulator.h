@@ -162,10 +162,11 @@ class Emulator {
 		// Resets the emulator to the parent it was previously forked from
 		void reset(const Emulator& other);
 
-		// Perform run with provided input. May throw Fault or RunTimeout
-		void run(const std::string& input, cov_t& cov, uint32_t& new_cov,
-		         Stats& local_stats);
+		// Perform run with provided input using the interpreter
+		void run_interpreter(const std::string& input, cov_t& cov,
+		                     uint32_t& new_cov, Stats& local_stats);
 
+		// Perform run with provided input using the JIT
 		void run_jit(const std::string& input, cov_t& cov, uint32_t& new_cov,
 		             jit_cache_t& jit_cache, Stats& local_stats);
 

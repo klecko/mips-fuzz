@@ -109,7 +109,8 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 			p_vm_state_ty,  // p_vm_state
 			p_exit_info_ty, // p_exit_info
 			int8ptr_ty,     // cov_map
-			int32ptr_ty     // p_new_cov
+			int32ptr_ty,    // p_new_cov
+			int32ptr_ty,    // regs_dump
 		},
 		false               // varargs
 	);
@@ -173,7 +174,7 @@ bool Jitter::load_from_disk(const string& name){
 	if (access(cache_name.c_str(), R_OK) == -1)
 		return false;
 
-	cout << "Loading cached " << name << endl;
+	//cout << "Loading cached " << name << endl;
 
 	// Read file into memory buffer
 	auto buffer = llvm::MemoryBuffer::getFile(cache_name);
@@ -632,29 +633,6 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 
 	bool end = false;
 	while (!end){
-		/*
-		// Log state
-		if (0x41e810 <= pc && pc <= 0x41e89c){
-			llvm::Value* p_num_inst = &function->arg_begin()[2];
-			llvm::Value* num_inst = builder.CreateLoad(p_num_inst);
-			llvm::Value* state_i = builder.CreateMul(num_inst, builder.getInt32(35));
-			llvm::Value* states = &function->arg_begin()[3];
-			llvm::Value* p_state = builder.CreateInBoundsGEP(states, state_i);
-			for (int i = 0; i < 34; i++){
-				llvm::Value* p_reg = builder.CreateInBoundsGEP(p_state, builder.getInt32(i));
-				builder.CreateStore(get_reg(i), p_reg);
-			}
-			llvm::Value* p_reg = builder.CreateInBoundsGEP(p_state, builder.getInt32(34));
-			builder.CreateStore(builder.getInt32(pc), p_reg);
-			llvm::Value* num_inst2 = builder.CreateAdd(num_inst, builder.getInt32(1));
-			builder.CreateStore(num_inst2, p_num_inst);
-		} */
-/* 		if (pc == 0x400ca8){
-			llvm::Value* reenter_pc = builder.getInt32(pc+4);
-			vm_exit(exit_info::ExitReason::Breakpoint, reenter_pc);
-			break;
-		} */
-
 		end = handle_inst(pc);
 
 		// Check if this instruction had a breakpoint. We have already executed
@@ -673,6 +651,20 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 }
 
 bool Jitter::handle_inst(vaddr_t pc){
+	// Log state
+	if (false){
+		llvm::Value* num_inst = builder.CreateLoad(p_instr);
+		llvm::Value* i_dump = builder.CreateMul(num_inst, builder.getInt64(35));
+		llvm::Value* regs_dump = &function->arg_begin()[4];
+		llvm::Value* reg_dump  = builder.CreateInBoundsGEP(regs_dump, i_dump);
+		for (int i = 0; i < 34; i++){
+			llvm::Value* p_reg = builder.CreateInBoundsGEP(reg_dump, builder.getInt32(i));
+			builder.CreateStore(get_reg(i), p_reg);
+		}
+		llvm::Value* p_reg = builder.CreateInBoundsGEP(reg_dump, builder.getInt32(34));
+		builder.CreateStore(builder.getInt32(pc), p_reg);
+	}
+
 	// Increment instruction count
 	llvm::Value* instr     = builder.CreateLoad(p_instr, "instr");
 	llvm::Value* instr_inc = builder.CreateAdd(instr, builder.getInt64(1));
@@ -1404,7 +1396,7 @@ bool Jitter::inst_sllv(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	llvm::Value* mask  = builder.getInt32(0b00011111);
 	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
-	set_reg(inst.d, builder.CreateShl(get_reg(inst.d), shamt));
+	set_reg(inst.d, builder.CreateShl(get_reg(inst.t), shamt));
 	return false;
 }
 
@@ -1412,7 +1404,7 @@ bool Jitter::inst_srlv(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	llvm::Value* mask  = builder.getInt32(0b00011111);
 	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
-	set_reg(inst.d, builder.CreateLShr(get_reg(inst.d), shamt));
+	set_reg(inst.d, builder.CreateLShr(get_reg(inst.t), shamt));
 	return false;
 }
 
@@ -1615,7 +1607,7 @@ bool Jitter::inst_lwc1(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_swc1(vaddr_t pc, uint32_t val){
 	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	return false;
 }
 
 bool Jitter::inst_ldc1(vaddr_t pc, uint32_t val){

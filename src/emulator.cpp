@@ -278,8 +278,8 @@ void Emulator::run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats){
 	local_stats.inst_handl_cycles += rdtsc2() - cycles;
 }
 
-void Emulator::run(const string& input, cov_t& cov, uint32_t& new_cov,
-                   Stats& local_stats)
+void Emulator::run_interpreter(const string& input, cov_t& cov,
+                               uint32_t& new_cov, Stats& local_stats)
 {
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
@@ -291,13 +291,14 @@ void Emulator::run(const string& input, cov_t& cov, uint32_t& new_cov,
 	running = true;
 	cycle_t cycles = rdtsc1(); // run_cycles
 	while (running){
+		if (false)
+			cout << *this;
 		run_inst(cov, new_cov, local_stats);
 		local_stats.instr += 1;
 
 		instr_exec += 1;
 		if (instr_exec >= INSTR_TIMEOUT)
 			throw RunTimeout();
-		//cout << *this << endl;
 	}
 	local_stats.run_cycles += rdtsc1() - cycles;
 }
@@ -334,7 +335,8 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 	};
 	exit_info exit_inf;
 	uint8_t*  cov_map = cov.data();
-	//uint32_t regs_state[2000][35];
+	uint32_t regs_state[2000][35];
+	uint64_t ret;
 
 	running = true;
 	jit_block_t jit_block;
@@ -357,8 +359,8 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
 		cycles = rdtsc1(); // run_cycles
-		local_stats.instr +=
-			jit_block(&state, &exit_inf, cov_map, &new_cov);
+		ret = jit_block(&state, &exit_inf, cov_map, &new_cov, regs_state);
+		local_stats.instr += ret;
 		local_stats.run_cycles += rdtsc1() - cycles;
 
 		// Handle the vm exit
@@ -371,9 +373,9 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 				break;
 			case exit_info::ExitReason::Fault:
 				// JIT just tells us there's a fault with no additional info.
-				// Run emulator from last reenter pc and let it throw a more
+				// Run interpreter from last reenter pc and let it throw a more
 				// accurate fault
-				run(input, cov, new_cov, local_stats);
+				run_interpreter(input, cov, new_cov, local_stats);
 				die("JIT said fault but interpreter didn't\n");
 			case exit_info::ExitReason::Exception:
 				die("Exception??\n");
@@ -396,23 +398,22 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 				die("Unknown exit reason: %d\n", exit_inf.reason);
 		}
 		local_stats.vm_exit_cycles += rdtsc2() - cycles;
+
+		// DUMP
+		if (false){
+			for (int h = 0; h < ret; h++){
+				cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
+				cout << "PC:  " << setw(8) << regs_state[h][34] << endl;
+				for (int i = 0; i < 34; i++){
+					cout << "$" << regs_map[i] << ": " << setw(8) << regs_state[h][i] << "\t";
+					if ((i+1)%8 == 0)
+						cout << endl;
+				}
+				cout << endl << endl;
+			}
+		}
 		pc = exit_inf.reenter_pc;
 		prev_pc = pc; // not sure about this, we'll see
-		/* 
-		// DUMP
-		for (int h = 0; h < num_inst; h++){
-			cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
-			cout << "PC:  " << setw(8) << regs_state[h][34] << endl;
-			for (int i = 0; i < 34; i++){
-				cout << "$" << regs_map[i] << ": " << setw(8) << regs_state[h][i] << "\t";
-				if ((i+1)%8 == 0)
-					cout << endl;
-			}
-			cout << endl << endl;
-		}
-		*/
-
-		//die("done\n");
 	}
 }
 
@@ -967,7 +968,8 @@ ostream& operator<<(ostream& os, const Emulator& emu){
 		if ((i+1)%8 == 0)
 			os << endl;
 	}
-
+	os << "$hi: " << setw(8) << hi << "\t$lo: " << setw(8) << lo << endl;
+	os << endl;
 	for (int i = 0; i < 32; i+=2){
 		os << "$f" << setw(2) << i << ": " << setw(8) << emu.getd_reg(i) << "\t";
 		if ((i+2) % 16 == 0)

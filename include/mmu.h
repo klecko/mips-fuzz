@@ -21,7 +21,7 @@ class Mmu {
 		static const uint8_t PERM_WRITE = (1 << 1); // Can be written
 		static const uint8_t PERM_EXEC  = (1 << 2); // Can be executed
 		static const uint8_t PERM_INIT  = (1 << 3); // Has been initialized
-		static const vsize_t MAX_BRK_SZ = 0x50000;
+		static const vsize_t MAX_BRK_SZ = 0x100000;
 		static const vsize_t DIRTY_BLOCK_SIZE = 128;
 
 	private:

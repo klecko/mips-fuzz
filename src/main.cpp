@@ -85,8 +85,8 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			new_cov = 0;
 
 			try {
-				runner.run(input, cov, new_cov, local_stats);
-				//runner.run_jit(input, cov, new_cov, jit_cache, local_stats);
+				//runner.run_interpreter(input, cov, new_cov, local_stats);
+				runner.run_jit(input, cov, new_cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
@@ -142,8 +142,8 @@ int main(){
 	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(
 		8 * 1024 * 1024,                // memory
-		"../test_bins/test/test",       // path to elf
-		{"test", "input_file"}          // argv
+		"../test_bins/readelf",         // path to elf
+		{"readelf", "-e", "input_file"} // argv
 	);
 	jit_cache_t jit_cache = {
 		{},
@@ -156,7 +156,7 @@ int main(){
 	// xxd:     0x00429e6c
 	// readelf: 0x004c081c
 	try {
-		uint64_t insts = emu.run_until(0x00423ec8);
+		uint64_t insts = emu.run_until(0x004c081c);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault runing before forking" << endl;
