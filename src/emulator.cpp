@@ -28,7 +28,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	running   = false;
 	input     = NULL;
 	input_sz  = 0;
-	breakpoints_bitmap.resize(mem_size);
+	bps_bitmap.resize(mem_size);
 	load_elf(filepath, argv);
 }
 
@@ -186,7 +186,7 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	push_stack<uint32_t>(argv.size());
 
 	// Set breakpoints. Do it here because we have access to symbols
-	//set_bps(elf.get_symbols());
+	set_bps(elf.get_symbols());
 }
 
 
@@ -198,12 +198,13 @@ void Emulator::set_bps(const vector<symbol_t>& symbols){
 	set_bp_sym("__libc_valloc", &Emulator::valloc_bp, symbols);
 	set_bp_sym("pvalloc", &Emulator::pvalloc_bp, symbols);
 	set_bp_sym("__calloc", &Emulator::calloc_bp, symbols);
+	set_bp_sym("memcpy", &Emulator::memcpy_bp, symbols);
 }
 
 void Emulator::set_bp_addr(vaddr_t addr, breakpoint_t bp){
-	assert(addr < breakpoints_bitmap.size());
-	breakpoints[addr] = bp;
-	breakpoints_bitmap[addr] = true;
+	assert(addr < bps_bitmap.size());
+	bps[addr] = bp;
+	bps_bitmap[addr] = true;
 }
 
 void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
@@ -239,9 +240,9 @@ void Emulator::run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats){
 	// Handle breakpoint. Record coverage if it changed pc, same as we do in
 	// branches
 	cycle_t cycles = rdtsc2();
-	if (breakpoints_bitmap[pc]){
+	if (bps_bitmap[pc]){
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
-		(this->*breakpoints[pc])();
+		(this->*bps[pc])();
 		if (pc != pc_bf_bp)    // pc changed
 			new_cov += add_coverage(cov, pc_bf_bp, pc);
 	}
@@ -332,6 +333,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 		&ccs,
 	};
 	exit_info exit_inf;
+	uint8_t*  cov_map = cov.data();
 	//uint32_t regs_state[2000][35];
 
 	running = true;
@@ -340,22 +342,23 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 	while (running){
 		// Get the JIT block and run it
 		cycles = rdtsc2(); // jit_cache_cycles
-		if (!jit_cache.cache[pc]){
+		jit_block = jit_cache.cache[pc];
+		if (!jit_block){
 			// Writing to the cache is thread-safe because it is a vector, but
 			// it seems like LLVM jitting is not. Thus, we lock here so there's
 			// only one thread jitting at a time.
 			// It could happen that two or more threads wait to JIT the same pc.
 			// The second will load it from disk cache, so it is not a problem.
 			jit_cache.mtx.lock();
-			jit_cache.cache[pc] = Jitter(pc, mmu, cov.size()).get_result();
+			jit_block = Jitter(pc, mmu, cov.size(), bps_bitmap).get_result();
 			jit_cache.mtx.unlock();
+			jit_cache.cache[pc] = jit_block;
 		}
-		jit_block = jit_cache.cache[pc];
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
 		cycles = rdtsc1(); // run_cycles
 		local_stats.instr +=
-			jit_block(&state, &exit_inf, cov.data(), &new_cov);
+			jit_block(&state, &exit_inf, cov_map, &new_cov);
 		local_stats.run_cycles += rdtsc1() - cycles;
 
 		// Handle the vm exit
@@ -377,9 +380,18 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 			case exit_info::ExitReason::Rdhwr:
 				handle_rdhwr(exit_inf.info1, exit_inf.info2);
 				break;
-			case exit_info::ExitReason::Breakpoint:
-				test_bp();
+			case exit_info::ExitReason::Breakpoint:{
+				// Breakpoint address is reenter_pc - 4
+				vaddr_t pc_bf_bp = pc;
+				(this->*bps[exit_inf.reenter_pc-4])();
+				if (pc != pc_bf_bp){ 
+					// Breakpoint handler changed PC. Update reenter_pc and
+					// report coverage
+					exit_inf.reenter_pc = pc;
+					new_cov += add_coverage(cov, exit_inf.reenter_pc-4, pc);
+				}
 				break;
+			}
 			default:
 				die("Unknown exit reason: %d\n", exit_inf.reason);
 		}
@@ -475,6 +487,19 @@ void Emulator::calloc_bp(){
 	prev_pc = pc;
 	pc      = regs[Reg::ra];
 	dbgprintf("calloc(%u, %u) --> 0x%X\n", nmemb, size, addr);
+}
+
+void Emulator::memcpy_bp(){
+	//printf("memcpy_bp\n");
+	vaddr_t dst = regs[Reg::a0];
+	vaddr_t src = regs[Reg::a1];
+	vsize_t len = regs[Reg::a2];
+	mmu.copy_mem(dst, src, len);
+
+	regs[Reg::v0] = dst;
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
+	dbgprintf("memcpy(0x%X, 0x%X, %u)\n", dst, src, len);
 }
 
 uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){

@@ -15,6 +15,7 @@
 #include "inst_decoding.h"
 
 #define COVERAGE_ATTEMPT 0
+#define END_COMPILING_ON_CALLS 1
 
 using namespace std;
 
@@ -38,8 +39,10 @@ struct jit_init {
 	}
 };
 
-Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size):
-	mmu(mmu), cov_map_size(cov_map_size), p_context(new llvm::LLVMContext),
+Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
+               const vector<bool>& bps_bitmap):
+	mmu(mmu), cov_map_size(cov_map_size), bps_bitmap(bps_bitmap),
+	p_context(new llvm::LLVMContext),
 	p_module(new llvm::Module("module", *p_context)),
 	context(*p_context), module(*p_module), builder(context)
 {
@@ -144,10 +147,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size):
 	// every memory access
 	fault_path = llvm::BasicBlock::Create(context, "fault_path", function);
 	builder.SetInsertPoint(fault_path);
-	gen_vm_exit(
-		exit_info::ExitReason::Fault,
-		builder.getInt32(0)
-	);
+	vm_exit(exit_info::ExitReason::Fault, builder.getInt32(0));
 	builder.SetInsertPoint(entry_block);
 
 	// Create basic blocks recursively
@@ -335,7 +335,7 @@ llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
 	return p_value;
 }
 
-void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
+void Jitter::vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
                          llvm::Value* info1, llvm::Value* info2)
 {
 	// Get pointer to exit info fields, write to them and return
@@ -386,7 +386,7 @@ void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
 
-void Jitter::gen_add_coverage(llvm::Value* from, llvm::Value* to){
+void Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
 	// Compute branch hash. When `from` and `to` are constants, this will be
 	// translated to a constant (for example in bal)
 	llvm::Value* tmp1 = builder.CreateShl (from, builder.getInt32(6));
@@ -429,7 +429,7 @@ void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len){
 		builder.getInt32(len),
 		"last_addr"
 	);
-	llvm::Value* cmp = builder.CreateICmpUGT(last_addr, memsize, "cmp_bounds");
+	llvm::Value* cmp = builder.CreateICmpUGE(last_addr, memsize, "cmp_bounds");
 	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
 
 	// Continue building nofault path
@@ -490,40 +490,9 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len){
 	builder.SetInsertPoint(nofault_path);
 }
 
-llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc){
-	assert(len != 0);
-
-	// Check out of bounds
-	check_bounds_mem(addr, len);
-
-	// Check permissions
-	check_perms_mem(addr, len, Mmu::PERM_READ);
-
-	// Check alignment
-	check_alignment_mem(addr, len);
-
-	// Get pointer to memory position, cast it from i8* to iN* and read from it
-	llvm::Value* p_value      = get_pmemory(addr);
-	llvm::Type*  cast_type    = llvm::Type::getIntNPtrTy(context, len*8);
-	llvm::Value* p_value_cast = builder.CreateBitCast(p_value, cast_type);
-	return builder.CreateLoad(p_value_cast);
-}
-
-void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
-                       vaddr_t pc)
-{
-	assert(len != 0);
-
-	// Check out of bounds
-	check_bounds_mem(addr, len);
-
-	// Check permissions
-	check_perms_mem(addr, len, Mmu::PERM_WRITE);
-
-	// Check alignment
-	check_alignment_mem(addr, len);
-
-	/* DIRTY. Pseudocode:
+void Jitter::set_dirty(llvm::Value* addr, vsize_t len){
+	assert(len > 0);
+	/* Pseudocode:
 	 *
 	 * block_begin = addr/DIRTY_BLOCK_SIZE
 	 * block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1
@@ -595,6 +564,41 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 
 	// For end. Continue with the store
 	builder.SetInsertPoint(for_end);
+}
+
+llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len){
+	assert(len != 0);
+
+	// Check out of bounds
+	check_bounds_mem(addr, len);
+
+	// Check permissions
+	check_perms_mem(addr, len, Mmu::PERM_READ);
+
+	// Check alignment
+	check_alignment_mem(addr, len);
+
+	// Get pointer to memory position, cast it from i8* to iN* and read from it
+	llvm::Value* p_value      = get_pmemory(addr);
+	llvm::Type*  cast_type    = llvm::Type::getIntNPtrTy(context, len*8);
+	llvm::Value* p_value_cast = builder.CreateBitCast(p_value, cast_type);
+	return builder.CreateLoad(p_value_cast);
+}
+
+void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len){
+	assert(len != 0);
+
+	// Check out of bounds
+	check_bounds_mem(addr, len);
+
+	// Check permissions
+	check_perms_mem(addr, len, Mmu::PERM_WRITE);
+
+	// Check alignment
+	check_alignment_mem(addr, len);
+
+	// Set dirty
+	set_dirty(addr, len);
 
 	// Get pointer to memory position, cast it from i8* to iN*, cast value from
 	// ?? to iN, and write value to pointer
@@ -647,11 +651,19 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 		} */
 /* 		if (pc == 0x400ca8){
 			llvm::Value* reenter_pc = builder.getInt32(pc+4);
-			gen_vm_exit(exit_info::ExitReason::Breakpoint, reenter_pc);
+			vm_exit(exit_info::ExitReason::Breakpoint, reenter_pc);
 			break;
 		} */
 
 		end = handle_inst(pc);
+
+		// Check if this instruction had a breakpoint. We have already executed
+		// the instruction, so reenter pc is the next one. I haven't thought of
+		// any way of doing this without executing the instruction
+		if (bps_bitmap[pc]){
+			vm_exit(exit_info::ExitReason::Breakpoint, builder.getInt32(pc+4));
+			break;
+		}
 		pc += 4;
 	}
 
@@ -734,15 +746,24 @@ bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
 			builder.getInt32(jump_addr),
 			builder.getInt32(pc+4)
 		);
-		gen_add_coverage(builder.getInt32(pc), cov_addr);
+		add_coverage(builder.getInt32(pc), cov_addr);
 	}
-	// This jump is a call: finish compilation
-	llvm::Value* reenter_pc = builder.CreateSelect(
-		cmp,
-		builder.getInt32(jump_addr),
-		builder.getInt32(pc+4)
-	);
-	gen_vm_exit(exit_info::ExitReason::IndirectBranch, reenter_pc);
+
+	if (END_COMPILING_ON_CALLS){
+		// This jump is a call: finish compilation
+		llvm::Value* reenter_pc = builder.CreateSelect(
+			cmp,
+			builder.getInt32(jump_addr),
+			builder.getInt32(pc+4)
+		);
+		vm_exit(exit_info::ExitReason::IndirectBranch, reenter_pc);
+	} else {
+		// Create both blocks, branch and finish compilation
+		llvm::BasicBlock* true_block  = create_block(jump_addr);
+		llvm::BasicBlock* false_block = create_block(pc+4);
+
+		builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
+	}
 	return true;
 }
 
@@ -767,7 +788,7 @@ bool Jitter::inst_lw(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	set_reg(inst.t, read_mem(addr, 4, pc));
+	set_reg(inst.t, read_mem(addr, 4));
 	return false;
 }
 
@@ -781,7 +802,7 @@ bool Jitter::inst_sw(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 4, pc);
+	write_mem(addr, get_reg(inst.t), 4);
 	return false;
 }
 
@@ -796,11 +817,11 @@ bool Jitter::inst_jalr(vaddr_t pc, uint32_t val){
 
 	// Record coverage
 	if (COVERAGE_ATTEMPT){
-		gen_add_coverage(builder.getInt32(pc), jump_addr);
+		add_coverage(builder.getInt32(pc), jump_addr);
 	}
 
 	// Generate indirect branch and finish compilation
-	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
+	vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
 	return true;
 }
 
@@ -822,7 +843,7 @@ bool Jitter::inst_beq(vaddr_t pc, uint32_t val){
 			builder.getInt32(jump_addr),
 			builder.getInt32(pc+4)
 		);
-		gen_add_coverage(builder.getInt32(pc), cov_addr);
+		add_coverage(builder.getInt32(pc), cov_addr);
 	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -863,7 +884,7 @@ bool Jitter::inst_bne(vaddr_t pc, uint32_t val){
 			builder.getInt32(jump_addr),
 			builder.getInt32(pc+4)
 		);
-		gen_add_coverage(builder.getInt32(pc), cov_addr);
+		add_coverage(builder.getInt32(pc), cov_addr);
 	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -882,11 +903,11 @@ bool Jitter::inst_jr(vaddr_t pc, uint32_t val){
 
 	// Record coverage
 	if (COVERAGE_ATTEMPT){
-		gen_add_coverage(builder.getInt32(pc), jump_addr);
+		add_coverage(builder.getInt32(pc), jump_addr);
 	}
 
 	// Generate indirect branch and finish compilation
-	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
+	vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
 	return true;
 }
 
@@ -894,14 +915,14 @@ bool Jitter::inst_lhu(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 2, pc);
+	llvm::Value* value = read_mem(addr, 2);
 	set_reg(inst.t, value);
 	return false;
 }
 
 bool Jitter::inst_syscall(vaddr_t pc, uint32_t val){
 	llvm::Value* reenter_pc = builder.getInt32(pc);
-	gen_vm_exit(exit_info::ExitReason::Syscall, reenter_pc);
+	vm_exit(exit_info::ExitReason::Syscall, reenter_pc);
 	return true;
 }
 
@@ -975,7 +996,7 @@ bool Jitter::inst_teq(vaddr_t pc, uint32_t val){
 	
 	builder.SetInsertPoint(trap_path);
 	llvm::Value* reenter_pc = builder.getInt32(pc);
-	gen_vm_exit(exit_info::ExitReason::Exception, reenter_pc);
+	vm_exit(exit_info::ExitReason::Exception, reenter_pc);
 
 	builder.SetInsertPoint(normal_path);
 	return false;
@@ -1029,7 +1050,7 @@ bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
 			builder.getInt32(jump_addr),
 			builder.getInt32(pc+4)
 		);
-		gen_add_coverage(builder.getInt32(pc), cov_addr);
+		add_coverage(builder.getInt32(pc), cov_addr);
 	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -1057,7 +1078,7 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 			builder.getInt32(jump_addr),
 			builder.getInt32(pc+4)
 		);
-		gen_add_coverage(builder.getInt32(pc), cov_addr);
+		add_coverage(builder.getInt32(pc), cov_addr);
 	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -1070,7 +1091,7 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 bool Jitter::inst_rdhwr(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
 	llvm::Value* reenter_pc = builder.getInt32(pc);
-	gen_vm_exit(
+	vm_exit(
 		exit_info::ExitReason::Rdhwr,
 		reenter_pc, 
 		builder.getInt32(inst.d), 
@@ -1097,7 +1118,7 @@ bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
 			builder.getInt32(jump_addr),
 			builder.getInt32(pc+4)
 		);
-		gen_add_coverage(builder.getInt32(pc), cov_addr);
+		add_coverage(builder.getInt32(pc), cov_addr);
 	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -1143,7 +1164,7 @@ bool Jitter::inst_pref(vaddr_t pc, uint32_t val){
 bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
 	// Calculate jump addr and set return address
 	inst_J_t inst(val);
-	llvm::Value* jump_addr = builder.getInt32((inst.A << 2)|(pc & 0xF0000000));
+	vaddr_t jump_addr = (inst.A << 2) | (pc & 0xF0000000);
 	set_reg(Reg::ra, pc+4);
 
 	// Handle delay slot
@@ -1151,11 +1172,19 @@ bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
 
 	// Record coverage
 	if (COVERAGE_ATTEMPT){
-		gen_add_coverage(builder.getInt32(pc), jump_addr);
+		add_coverage(builder.getInt32(pc), builder.getInt32(jump_addr));
 	}
 
-	// This jump is a call: finish compilation
-	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
+	if (END_COMPILING_ON_CALLS){
+		// This jump is a call: finish compilation
+		vm_exit(exit_info::ExitReason::IndirectBranch, 
+		        builder.getInt32(jump_addr));
+	} else {
+		// Create block, branch and finish compilation
+		llvm::BasicBlock* true_block  = create_block(jump_addr);
+
+		builder.Insert(llvm::BranchInst::Create(true_block));
+	}
 	return true;
 }
 
@@ -1163,7 +1192,7 @@ bool Jitter::inst_lb(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 1, pc); // type: i8
+	llvm::Value* value = read_mem(addr, 1); // type: i8
 	llvm::Value* value_sext = builder.CreateSExt(value, int32_ty); // type: i32
 	set_reg(inst.t, value_sext);
 	return false;
@@ -1238,7 +1267,7 @@ bool Jitter::inst_lh(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 2, pc); // type: i16
+	llvm::Value* value = read_mem(addr, 2); // type: i16
 	llvm::Value* value_sext = builder.CreateSExt(value, int32_ty); // type: i32
 	set_reg(inst.t, value_sext);
 	return false;
@@ -1248,7 +1277,7 @@ bool Jitter::inst_lbu(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 1, pc);
+	llvm::Value* value = read_mem(addr, 1);
 	set_reg(inst.t, value);
 	return false;
 }
@@ -1305,7 +1334,7 @@ bool Jitter::inst_sb(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 1, pc);
+	write_mem(addr, get_reg(inst.t), 1);
 	return false;
 }
 
@@ -1313,7 +1342,7 @@ bool Jitter::inst_sh(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 2, pc);
+	write_mem(addr, get_reg(inst.t), 2);
 	return false;
 }
 
@@ -1410,17 +1439,26 @@ bool Jitter::inst_add(vaddr_t pc, uint32_t val){
 bool Jitter::inst_j(vaddr_t pc, uint32_t val){
 	// Calculate jump address and handle delay slot
 	inst_J_t inst(val);
-	llvm::Value* jump_addr = builder.getInt32((inst.A << 2)|(pc & 0xF0000000));
+	vaddr_t jump_addr = (inst.A << 2) | (pc & 0xF0000000);
 	handle_inst(pc);
 
 	// Record coverage
 	if (COVERAGE_ATTEMPT){
-		gen_add_coverage(builder.getInt32(pc), jump_addr);
+		add_coverage(builder.getInt32(pc), builder.getInt32(jump_addr));
 	}
 
 	// This jump is a call: finish compilation.
-	// It seems to be used as a tail call or as a call with no return
-	gen_vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
+	if (END_COMPILING_ON_CALLS){
+		// It seems to be used as a tail call or as a call with no return
+		vm_exit(exit_info::ExitReason::IndirectBranch,
+		        builder.getInt32(jump_addr));
+	} else {
+		// Create block, branch and finish compilation
+		llvm::BasicBlock* true_block = create_block(jump_addr);
+
+		builder.Insert(llvm::BranchInst::Create(true_block));
+	}
+	
 	return true;
 }
 
@@ -1461,7 +1499,7 @@ bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
 			builder.getInt32(jump_addr),
 			builder.getInt32(pc+4)
 		);
-		gen_add_coverage(builder.getInt32(pc), cov_addr);
+		add_coverage(builder.getInt32(pc), cov_addr);
 	}
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -1662,7 +1700,7 @@ bool Jitter::inst_ctc1(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_break(vaddr_t pc, uint32_t val){
 	llvm::Value* reenter_pc = builder.getInt32(pc);
-	gen_vm_exit(exit_info::ExitReason::Exception, reenter_pc);
+	vm_exit(exit_info::ExitReason::Exception, reenter_pc);
 	return true;
 }
 

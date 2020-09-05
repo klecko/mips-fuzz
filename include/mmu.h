@@ -116,6 +116,8 @@ class Mmu {
 		// Checks bounds and perms
 		void write_mem(vaddr_t dst, const void* src, vsize_t len);
 
+		void copy_mem(vaddr_t dst, vaddr_t src, vsize_t len);
+
 		// Read and return and instruction from virtual addr `dst`.
 		// Checks bounds, perms and alignment
 		uint32_t read_inst(vaddr_t addr) const;

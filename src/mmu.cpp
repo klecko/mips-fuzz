@@ -233,6 +233,21 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	memcpy(memory+dst, src, len);
 }
 
+void Mmu::copy_mem(vaddr_t dst, vaddr_t src, vsize_t len){
+	check_bounds(src, len, PERM_READ);
+	check_perms(src, len, PERM_READ);
+
+	check_bounds(dst, len, PERM_WRITE);
+	check_perms(dst, len, PERM_WRITE);
+
+	for (int addr = dst; addr < dst+len; addr++)
+		perms[addr] |= PERM_INIT;
+
+	set_dirty(dst, len);
+
+	memcpy(memory+dst, memory+src, len);
+}
+
 uint32_t Mmu::read_inst(vaddr_t addr) const {
 	// Check out of bounds
 	check_bounds(addr, 4, PERM_EXEC);

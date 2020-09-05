@@ -66,6 +66,7 @@ class Jitter {
 	private:
 		const Mmu& mmu;
 		size_t cov_map_size;
+		const std::vector<bool> bps_bitmap;
 
 		std::unique_ptr<llvm::LLVMContext> p_context;
 		std::unique_ptr<llvm::Module>      p_module;
@@ -116,10 +117,10 @@ class Jitter {
 		llvm::Value* get_pmemory(llvm::Value* addr);
 
 		// Generate vm exit with given information
-		void gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-		                 llvm::Value* info1=NULL, llvm::Value* info2=NULL);
+		void vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
+		             llvm::Value* info1=NULL, llvm::Value* info2=NULL);
 
-		void gen_add_coverage(llvm::Value* from, llvm::Value* to);
+		void add_coverage(llvm::Value* from, llvm::Value* to);
 
 		// Generation of memory access checks. We also generate a fault vm exit
 		// so faults are notified at runtime if any check fails.
@@ -133,12 +134,13 @@ class Jitter {
 		// Generate alignment checks for memory access
 		void check_alignment_mem(llvm::Value* addr, vsize_t len);
 
+		void set_dirty(llvm::Value* addr, vsize_t len);
+
 		// Reads a value from memory. Checks bounds, perms and alignment
-		llvm::Value* read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc);
+		llvm::Value* read_mem(llvm::Value* addr, vsize_t len);
 
 		// Writes a value to memory. Checks bounds, perms and alignment
-		void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
-		               vaddr_t pc);
+		void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len);
 
 		// Lift code at `pc`. It calls instruction handlers, which eventually
 		// create other blocks until every path leads to a vm exit
@@ -152,7 +154,8 @@ class Jitter {
 		void compile();
 
 	public:
-		Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size);
+		Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
+		       const std::vector<bool>& bps_bitmap);
 		jit_block_t get_result();
 
 	private: // Instruction handlers

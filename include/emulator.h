@@ -73,8 +73,8 @@ class Emulator {
 		std::string elfpath;
 
 		// Breakpoints, indexed by address
-		std::unordered_map<vaddr_t, breakpoint_t> breakpoints;
-		std::vector<bool> breakpoints_bitmap;
+		std::unordered_map<vaddr_t, breakpoint_t> bps;
+		std::vector<bool> bps_bitmap;
 
 		// Load elf into memory, allocate stack and set up argv and company
 		void load_elf(const std::string& filepath,
@@ -98,6 +98,7 @@ class Emulator {
 		void valloc_bp();   // __libc_valloc
 		void pvalloc_bp();  // pvalloc
 		void calloc_bp();   // __calloc
+		void memcpy_bp();   // memcpy
 
 		// Syscalls
 		uint32_t sys_brk(vaddr_t new_brk, uint32_t& error);

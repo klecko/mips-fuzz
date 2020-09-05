@@ -41,7 +41,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		bp_time         = (double)stats.bp_cycles / stats.total_cycles;
 		jit_cache_time  = (double)stats.jit_cache_cycles / stats.total_cycles;
 		vm_exit_time    = (double)stats.vm_exit_cycles / stats.total_cycles;
-		printf("[%u secs] cases: %lu, minstr/s: %.3f, fcps: %.3f, cov: %lu, "
+		printf("[%u secs] cases: %lu, minstrps: %.3f, fcps: %.3f, cov: %lu, "
 		       "corpus: %lu/%.3fKB, uniq crashes: %lu, crashes: %lu, "
 		       "timeouts: %lu\n",
 		       elapsed, cases, minstrps, fcps, cov, corpus_n, corpus_sz,
@@ -85,8 +85,8 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			new_cov = 0;
 
 			try {
-				//runner.run(input, cov, new_cov, local_stats);
-				runner.run_jit(input, cov, new_cov, jit_cache, local_stats);
+				runner.run(input, cov, new_cov, local_stats);
+				//runner.run_jit(input, cov, new_cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
