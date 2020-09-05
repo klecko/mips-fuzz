@@ -25,6 +25,7 @@ llvm::Type* int16_ty;
 llvm::Type* int32_ty;
 llvm::Type* int64_ty;
 llvm::Type* float_ty;
+llvm::Type* int1ptr_ty;
 llvm::Type* int8ptr_ty;
 llvm::Type* int32ptr_ty;
 llvm::Type* floatptr_ty;
@@ -37,12 +38,15 @@ struct jit_init {
 	}
 };
 
-Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
-	mmu(_mmu), p_context(new llvm::LLVMContext),
+Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size):
+	mmu(mmu), cov_map_size(cov_map_size), p_context(new llvm::LLVMContext),
 	p_module(new llvm::Module("module", *p_context)),
 	context(*p_context), module(*p_module), builder(context)
 {
 	static jit_init init; // thread_local?
+
+	if (__builtin_popcount(cov_map_size) != 1)
+		die("Coverage map size must be power of 2\n");
 
 	// Get function name
 	ostringstream oss;
@@ -65,6 +69,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 	int32_ty     = llvm::Type::getInt32Ty(context);
 	int64_ty     = llvm::Type::getInt64Ty(context);
 	float_ty     = llvm::Type::getFloatTy(context);
+	int1ptr_ty   = llvm::Type::getInt1PtrTy(context);
 	int8ptr_ty   = llvm::Type::getInt8PtrTy(context);
 	int32ptr_ty  = llvm::Type::getInt32PtrTy(context);
 	floatptr_ty  = llvm::Type::getFloatPtrTy(context);
@@ -132,6 +137,18 @@ Jitter::Jitter(vaddr_t pc, const Mmu& _mmu):
 		get_state_field(6, "p_fpregs"),
 		get_state_field(7, "p_ccs"),
 	};
+
+	// Create fault path. Whenever a fault occurs, this fast vm exit will be
+	// taken and we'll run the interpreter to get more details about the fault.
+	// This is much better than generating code for every possible fault in
+	// every memory access
+	fault_path = llvm::BasicBlock::Create(context, "fault_path", function);
+	builder.SetInsertPoint(fault_path);
+	gen_vm_exit(
+		exit_info::ExitReason::Fault,
+		builder.getInt32(0)
+	);
+	builder.SetInsertPoint(entry_block);
 
 	// Create basic blocks recursively
 	llvm::BasicBlock* bb = create_block(pc);
@@ -370,15 +387,14 @@ void Jitter::gen_vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 }
 
 void Jitter::gen_add_coverage(llvm::Value* from, llvm::Value* to){
-	// Compute branch hash
+	// Compute branch hash. When `from` and `to` are constants, this will be
+	// translated to a constant (for example in bal)
 	llvm::Value* tmp1 = builder.CreateShl (from, builder.getInt32(6));
 	llvm::Value* tmp2 = builder.CreateLShr(from, builder.getInt32(2));
 	llvm::Value* tmp3 = builder.CreateAdd(builder.CreateAdd(to, tmp1), tmp2);
 	llvm::Value* tmp4 = builder.CreateXor(from, tmp3);
-	llvm::Value* cov_map_size = builder.getInt32(mmu.size());
 	llvm::Value* branch_hash =
-		builder.CreateURem(tmp4, cov_map_size, "branch_hash");
-		//builder.CreateAnd(tmp4, builder.CreateSub(cov_map_size, builder.getInt32(1)));
+		builder.CreateAnd(tmp4, builder.getInt32(cov_map_size-1));
 
 	// Test and set the corresponding byte in cov_map
 	llvm::Value* cov_map     = &function->arg_begin()[2];
@@ -403,28 +419,8 @@ void Jitter::gen_add_coverage(llvm::Value* from, llvm::Value* to){
 	builder.CreateStore(new_cov_inc, p_new_cov);
 }
 
-void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
-                              vaddr_t pc)
-{
-	// Get fault type in case we have go the fault path
-	Fault::Type fault_type;
-	switch (perm){
-		case Mmu::PERM_READ:
-			fault_type = Fault::Type::OutOfBoundsRead;
-			break;
-		case Mmu::PERM_WRITE:
-			fault_type = Fault::Type::OutOfBoundsWrite;
-			break;
-		case Mmu::PERM_EXEC:
-			fault_type = Fault::Type::OutOfBoundsExec;
-			break;
-		default:
-			die("Wrong permissions check_bounds\n");
-	}
-
-	// Create both paths, compare and branch
-	llvm::BasicBlock* fault_path =
-		llvm::BasicBlock::Create(context, "fault_bounds", function);
+void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len){
+	// Create nofault path, compare and branch
 	llvm::BasicBlock* nofault_path =
 		llvm::BasicBlock::Create(context, "nofault_bounds", function);
 	llvm::Value* memsize = builder.getInt32(mmu.size());
@@ -436,40 +432,13 @@ void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	llvm::Value* cmp = builder.CreateICmpUGT(last_addr, memsize, "cmp_bounds");
 	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
 
-	// Fault path
-	builder.SetInsertPoint(fault_path);
-	gen_vm_exit(
-		exit_info::ExitReason::Fault,
-		builder.getInt32(pc-4),
-		builder.getInt32(fault_type),
-		addr
-	);
-
 	// Continue building nofault path
 	builder.SetInsertPoint(nofault_path);
 }
 
-void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
-                             vaddr_t pc)
-{
+void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm){
 	llvm::Type* mask_ty = llvm::Type::getIntNTy(context, len*8);
 	llvm::Type* ptr_ty  = llvm::Type::getIntNPtrTy(context, len*8);
-
-	// Get fault type in case we have go the fault path
-	Fault::Type fault_type;
-	switch (perm){
-		case Mmu::PERM_READ:
-			fault_type = Fault::Type::Read;
-			break;
-		case Mmu::PERM_WRITE:
-			fault_type = Fault::Type::Write;
-			break;
-		case Mmu::PERM_EXEC:
-			fault_type = Fault::Type::Exec;
-			break;
-		default:
-			die("Wrong permissions check_perms\n");
-	}
 
 	// Compute permission mask for given len
 	uint32_t perms_mask = 0;
@@ -477,9 +446,7 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 		perms_mask |= (perm << (i*8));
 	llvm::Value* perms_mask_val = llvm::ConstantInt::get(mask_ty, perms_mask);
 
-	// Create both paths
-	llvm::BasicBlock* fault_path =
-		llvm::BasicBlock::Create(context, "fault_perms", function);
+	// Create nofault path
 	llvm::BasicBlock* nofault_path =
 		llvm::BasicBlock::Create(context, "nofault_perms", function);
 
@@ -498,41 +465,12 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	llvm::Value* cmp = builder.CreateICmpNE(result, perms_mask_val, "cmp_perms");
 	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
 
-	// Fault path
-	builder.SetInsertPoint(fault_path);
-	gen_vm_exit(
-		exit_info::ExitReason::Fault,
-		builder.getInt32(pc-4),
-		builder.getInt32(fault_type),
-		addr
-	);
-
 	// Continue building nofault path
 	builder.SetInsertPoint(nofault_path);
 }
 
-void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
-                                 vaddr_t pc)
-{
-	// Get fault type in case we have go the fault path
-	Fault::Type fault_type;
-	switch (perm){
-		case Mmu::PERM_READ:
-			fault_type = Fault::Type::MisalignedRead;
-			break;
-		case Mmu::PERM_WRITE:
-			fault_type = Fault::Type::MisalignedWrite;
-			break;
-		case Mmu::PERM_EXEC:
-			fault_type = Fault::Type::MisalignedExec;
-			break;
-		default:
-			die("Wrong permissions check_alignment\n");
-	}
-
-	// Create both paths
-	llvm::BasicBlock* fault_path =
-		llvm::BasicBlock::Create(context, "fault_align", function);
+void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len){
+	// Create nofault paths
 	llvm::BasicBlock* nofault_path =
 		llvm::BasicBlock::Create(context, "nofault_align", function);
 
@@ -548,15 +486,6 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
 	);
 	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
 
-	// Fault path
-	builder.SetInsertPoint(fault_path);
-	gen_vm_exit(
-		exit_info::ExitReason::Fault,
-		builder.getInt32(pc-4),
-		builder.getInt32(fault_type),
-		addr
-	);
-
 	// Continue building nofault path
 	builder.SetInsertPoint(nofault_path);
 }
@@ -565,13 +494,13 @@ llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc){
 	assert(len != 0);
 
 	// Check out of bounds
-	check_bounds_mem(addr, len, Mmu::PERM_READ, pc);
+	check_bounds_mem(addr, len);
 
 	// Check permissions
-	check_perms_mem(addr, len, Mmu::PERM_READ, pc);
+	check_perms_mem(addr, len, Mmu::PERM_READ);
 
 	// Check alignment
-	check_alignment_mem(addr, len, Mmu::PERM_READ, pc);
+	check_alignment_mem(addr, len);
 
 	// Get pointer to memory position, cast it from i8* to iN* and read from it
 	llvm::Value* p_value      = get_pmemory(addr);
@@ -586,13 +515,13 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	assert(len != 0);
 
 	// Check out of bounds
-	check_bounds_mem(addr, len, Mmu::PERM_WRITE, pc);
+	check_bounds_mem(addr, len);
 
 	// Check permissions
-	check_perms_mem(addr, len, Mmu::PERM_WRITE, pc);
+	check_perms_mem(addr, len, Mmu::PERM_WRITE);
 
 	// Check alignment
-	check_alignment_mem(addr, len, Mmu::PERM_WRITE, pc);
+	check_alignment_mem(addr, len);
 
 	/* DIRTY. Pseudocode:
 	 *
@@ -1332,8 +1261,8 @@ bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	check_bounds_mem(addr_align, 4, Mmu::PERM_WRITE, pc);
-	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE, pc);
+	check_bounds_mem(addr_align, 4);
+	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
 	llvm::Value* p_mem = get_pmemory(addr_align);
 	llvm::Value* p_reg = get_preg(inst.t);
 	builder.CreateMemCpy(
@@ -1356,8 +1285,9 @@ bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	check_bounds_mem(addr_align, 4, Mmu::PERM_WRITE, pc);
-	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE, pc);
+	// Create fault path
+	check_bounds_mem(addr_align, 4);
+	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
 	llvm::Value* p_mem = get_pmemory(addr_align);
 	llvm::Value* p_reg = get_preg(inst.t);
 	builder.CreateMemCpy(
@@ -1395,8 +1325,9 @@ bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	check_bounds_mem(addr_align, 4, Mmu::PERM_WRITE, pc);
-	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE, pc);
+	// Create fault path
+	check_bounds_mem(addr_align, 4);
+	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
 	llvm::Value* p_mem = get_pmemory(addr_align);
 	llvm::Value* p_reg = get_preg(inst.t);
 	builder.CreateMemCpy(
@@ -1423,8 +1354,10 @@ bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
 	// Instead of reading the reg, reading the value from memory, moving part of 
 	// the reg to the value and writing back to memory, just change the value in
 	// memory. Some repeated code but I think it's worth it
-	check_bounds_mem(addr_align, 4, Mmu::PERM_WRITE, pc);
-	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE, pc);
+
+	// Create fault path
+	check_bounds_mem(addr_align, 4);
+	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
 	llvm::Value* p_mem = get_pmemory(addr_align);
 	llvm::Value* p_reg = get_preg(inst.t);
  	builder.CreateMemCpy(

@@ -219,7 +219,19 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 
 bool add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
 	// Mark branch as seen and return true if it had not been seen before
-	uint32_t hash = branch_hash(from, to)  % cov.size();
+	uint32_t hash = branch_hash(from, to) % (cov.size());
+
+/*	// Print hashes once for each branch. Useful for counting hash collisions
+	static map<pair<vaddr_t, vaddr_t>, bool> m;
+	static atomic_flag flag = ATOMIC_FLAG_INIT;
+	auto p = make_pair(from, to);
+	while (flag.test_and_set());
+	if (!m[p]){
+		m[p] = true;
+		cout << hash << endl;
+	}
+	flag.clear(); */
+
 	return !__atomic_test_and_set(&cov[hash], __ATOMIC_SEQ_CST);
 }
 
@@ -335,7 +347,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 			// It could happen that two or more threads wait to JIT the same pc.
 			// The second will load it from disk cache, so it is not a problem.
 			jit_cache.mtx.lock();
-			jit_cache.cache[pc] = Jitter(pc, mmu).get_result();
+			jit_cache.cache[pc] = Jitter(pc, mmu, cov.size()).get_result();
 			jit_cache.mtx.unlock();
 		}
 		jit_block = jit_cache.cache[pc];
@@ -355,8 +367,11 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 				handle_syscall(regs[Reg::v0]);
 				break;
 			case exit_info::ExitReason::Fault:
-				pc = prev_pc = exit_inf.reenter_pc;
-				throw Fault((Fault::Type)exit_inf.info1, exit_inf.info2);
+				// JIT just tells us there's a fault with no additional info.
+				// Run emulator from last reenter pc and let it throw a more
+				// accurate fault
+				run(input, cov, new_cov, local_stats);
+				die("JIT said fault but interpreter didn't\n");
 			case exit_info::ExitReason::Exception:
 				die("Exception??\n");
 			case exit_info::ExitReason::Rdhwr:
@@ -390,14 +405,17 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 }
 
 uint64_t Emulator::run_until(vaddr_t pc){
-	cov_t dummy = { vector<uint8_t>(memsize(), 0) };
+	cov_t dummy1(256*1024);
 	uint32_t dummy2;
 	Stats dummy3;
-	while (this->pc != pc){
-		run_inst(dummy, dummy2, dummy3);
+	running = true;
+	while (this->pc != pc && running){
+		run_inst(dummy1, dummy2, dummy3);
 		dummy3.instr++;
-		//cout << *this << endl;
 	}
+	if (!running)
+		die("Program finished runing while trying to run until 0x%X\n", pc);
+	running = false;
 	return dummy3.instr;
 }
 

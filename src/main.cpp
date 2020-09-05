@@ -149,7 +149,7 @@ int main(){
 		{},
 		vector<jit_block_t>(emu.memsize()),
 	};
-	cov_t cov(emu.memsize());
+	cov_t cov(256*1024);
 
 	// Run until open before forking
 	// test:    0x00423e8c | 0x41d6e4 | 0x00423e7c

@@ -18,7 +18,7 @@ struct Fault: public std::exception {
 		MisalignedRead,
 		MisalignedWrite,
 		MisalignedExec,
-		NoFault = 0xFFFFFFFF
+		Unknown = 0xFFFFFFFF
 	};
 
 	Fault::Type type;
@@ -54,6 +54,8 @@ inline std::string Fault::type_str() const {
 			return "MisalignedWrite";
 		case Fault::Type::MisalignedExec:
 			return "MisalignedExec";
+		case Fault::Type::Unknown:
+			return "Unknown";
 		default:
 			return "Unimplemented (" + std::to_string(type) + ")";
 	}

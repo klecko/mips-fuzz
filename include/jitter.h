@@ -65,6 +65,7 @@ typedef bool (Jitter::*const inst_handler_jit_t)(vaddr_t, uint32_t);
 class Jitter {
 	private:
 		const Mmu& mmu;
+		size_t cov_map_size;
 
 		std::unique_ptr<llvm::LLVMContext> p_context;
 		std::unique_ptr<llvm::Module>      p_module;
@@ -73,6 +74,8 @@ class Jitter {
 		llvm::IRBuilder<>  builder;
 		llvm::Function*    function;
 		llvm::Value*       p_instr;
+
+		llvm::BasicBlock*  fault_path;
 
 		struct {
 			llvm::Value* p_regs;
@@ -122,16 +125,13 @@ class Jitter {
 		// so faults are notified at runtime if any check fails.
 
 		// Generate bounds checks for memory access
-		void check_bounds_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
-		                      vaddr_t pc);
+		void check_bounds_mem(llvm::Value* addr, vsize_t len);
 
 		// Generate perms checks for memory access
-		void check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm,
-		                     vaddr_t pc);
+		void check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm);
 
 		// Generate alignment checks for memory access
-		void check_alignment_mem(llvm::Value* addr, vsize_t len, uint8_t perm, 
-		                         vaddr_t pc);
+		void check_alignment_mem(llvm::Value* addr, vsize_t len);
 
 		// Reads a value from memory. Checks bounds, perms and alignment
 		llvm::Value* read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc);
@@ -152,7 +152,7 @@ class Jitter {
 		void compile();
 
 	public:
-		Jitter(vaddr_t pc, const Mmu& mmu);
+		Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size);
 		jit_block_t get_result();
 
 	private: // Instruction handlers
