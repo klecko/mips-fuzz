@@ -1239,12 +1239,15 @@ bool Jitter::inst_wsbh(vaddr_t pc, uint32_t val){
 	llvm::Value* mask2 = builder.getInt32(0x00FF0000);
 	llvm::Value* mask3 = builder.getInt32(0x0000FF00);
 	llvm::Value* mask4 = builder.getInt32(0x000000FF);
-	llvm::Value* res = builder.CreateOr({
-		builder.CreateLShr(builder.CreateAnd(v, mask1), int8),
-		builder.CreateShl (builder.CreateAnd(v, mask2), int8),
-		builder.CreateLShr(builder.CreateAnd(v, mask3), int8),
-		builder.CreateShl (builder.CreateAnd(v, mask4), int8)
-	});
+	llvm::Value* tmp1  = builder.CreateOr(
+			builder.CreateLShr(builder.CreateAnd(v, mask1), int8),
+			builder.CreateShl (builder.CreateAnd(v, mask2), int8)
+	);
+	llvm::Value* tmp2  = builder.CreateOr(
+			builder.CreateLShr(builder.CreateAnd(v, mask3), int8),
+			builder.CreateShl (builder.CreateAnd(v, mask4), int8)
+	);
+	llvm::Value* res   = builder.CreateOr(tmp1, tmp2);
 	set_reg(inst.d, res);
 	return false;
 }
