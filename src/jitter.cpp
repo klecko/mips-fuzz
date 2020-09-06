@@ -14,7 +14,7 @@
 #include "jitter.h"
 #include "inst_decoding.h"
 
-#define COVERAGE_ATTEMPT 0
+#define COVERAGE_ATTEMPT 1
 #define END_COMPILING_ON_CALLS 1
 
 using namespace std;
@@ -104,7 +104,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 
 	// Create function
 	llvm::FunctionType* function_type = llvm::FunctionType::get(
-		int64_ty,           // ret: number of instructions executed
+		int32_ty,           // ret: number of instructions executed
 		{
 			p_vm_state_ty,  // p_vm_state
 			p_exit_info_ty, // p_exit_info
@@ -127,8 +127,8 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	llvm::BasicBlock* entry_block =
 		llvm::BasicBlock::Create(context, "entry", function);
 	builder.SetInsertPoint(entry_block);
-	p_instr = builder.CreateAlloca(int64_ty);
-	builder.CreateStore(builder.getInt64(0), p_instr);
+	p_instr = builder.CreateAlloca(int32_ty);
+	builder.CreateStore(builder.getInt32(0), p_instr);
 
 	// Load state
 	state = {
@@ -389,7 +389,8 @@ void Jitter::vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 
 void Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
 	// Compute branch hash. When `from` and `to` are constants, this will be
-	// translated to a constant (for example in bal)
+	// translated to a constant (for example in bal). Particularly, `from` is
+	// always constant
 	llvm::Value* tmp1 = builder.CreateShl (from, builder.getInt32(6));
 	llvm::Value* tmp2 = builder.CreateLShr(from, builder.getInt32(2));
 	llvm::Value* tmp3 = builder.CreateAdd(builder.CreateAdd(to, tmp1), tmp2);
@@ -401,13 +402,13 @@ void Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
 	llvm::Value* cov_map     = &function->arg_begin()[2];
 	llvm::Value* p_cov_value = builder.CreateInBoundsGEP(cov_map, branch_hash,
 	                                                     "p_cov_value");
-	llvm::Value* old = builder.CreateAtomicRMW(
-		llvm::AtomicRMWInst::BinOp::Xchg,
-		p_cov_value,
-		builder.getInt8(1),
-		llvm::AtomicOrdering::SequentiallyConsistent
-	);
-	llvm::Value* old_was_zero = builder.CreateICmpEQ(old, builder.getInt8(0));
+	// RACE CONDITION HERE between the load and the store. Probably we'll switch
+	// to local coverage
+	llvm::Value* old = builder.CreateLoad(p_cov_value);
+	builder.CreateStore(builder.getInt8(1), p_cov_value);
+
+	//llvm::Value* old_was_zero = builder.CreateICmpEQ(old, builder.getInt8(0));
+	llvm::Value* old_was_zero = builder.CreateNot(builder.CreateTrunc(old, int1_ty));
 
 	// Increment new_cov if old was zero
 	llvm::Value* p_new_cov   = &function->arg_begin()[3];
@@ -667,7 +668,7 @@ bool Jitter::handle_inst(vaddr_t pc){
 
 	// Increment instruction count
 	llvm::Value* instr     = builder.CreateLoad(p_instr, "instr");
-	llvm::Value* instr_inc = builder.CreateAdd(instr, builder.getInt64(1));
+	llvm::Value* instr_inc = builder.CreateAdd(instr, builder.getInt32(1));
 	builder.CreateStore(instr_inc, p_instr);
 
 	// Fetch current instruction

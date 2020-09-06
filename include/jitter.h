@@ -45,7 +45,7 @@ struct exit_info {
 	friend std::ostream& operator<<(std::ostream& os, const exit_info& exit_inf);
 };
 
-typedef uint64_t (*jit_block_t)(
+typedef uint32_t (*jit_block_t)(
 	vm_state*  p_vm_state,
 	exit_info* p_exit_info,
 	uint8_t*   cov_map,

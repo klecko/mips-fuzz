@@ -133,6 +133,9 @@ int main(){
 	const int num_threads = (DEBUG ? 1 : thread::hardware_concurrency());
 	cout << "Threads: " << num_threads << endl;
 
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+
 	// Create crash folder
 	create_folder("./crashes");
 	create_folder("./jitcache");
