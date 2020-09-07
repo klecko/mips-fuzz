@@ -25,12 +25,12 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		this_thread::sleep_for(chrono::seconds(1));
 		elapsed++;
 		cases           = stats.cases;
-		minstrps        = (double)stats.instr / (elapsed * 1000000);
+		minstrps        = (double)stats.instr / ((uint64_t)elapsed * 1000000);
 		fcps            = (double)cases / elapsed;
-		cov             = stats.cov;
+		cov             = corpus.get_cov();
 		corpus_n        = corpus.size();
 		corpus_sz       = (double)corpus.memsize() / 1024;
-		uniq_crashes    = corpus.uniq_crashes_size();
+		uniq_crashes    = corpus.get_uniq_crashes_size();
 		crashes         = stats.crashes;
 		timeouts        = stats.timeouts;
 		reset_time      = (double)stats.reset_cycles / stats.total_cycles;
@@ -59,7 +59,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 }
 
 void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
-            cov_t& cov, jit_cache_t& jit_cache, Stats& stats)
+            jit_cache_t& jit_cache, Stats& stats)
 {
 	// Custom RNG: avoids locks and simpler
 	Rng rng;
@@ -67,9 +67,10 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 	// Timetracing
 	cycle_t cycles_init, cycles;
 
-	// Number of new discovered branches in current run. If any, we'll report
-	// new coverage to corpus.
-	uint32_t new_cov;
+	// Recorded coverage in current run. It is reported to the corpus after
+	// each run
+	std::vector<uint8_t> cov;
+	size_t covsize = corpus.get_cov_map_size();
 
 	// Main loop
 	while (true){
@@ -82,11 +83,11 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			const string& input = corpus.get_new_input(id, rng);
 
 			// Clear coverage
-			new_cov = 0;
+			cov.assign(covsize, 0);
 
 			try {
-				//runner.run_interpreter(input, cov, new_cov, local_stats);
-				runner.run_jit(input, cov, new_cov, jit_cache, local_stats);
+				//runner.run_interpreter(input, cov, local_stats);
+				runner.run_jit(input, cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
@@ -99,10 +100,7 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			}
 
 			local_stats.cases++;
-			if (new_cov){
-				corpus.report_new_cov(id);
-				local_stats.cov += new_cov;
-			}
+			corpus.report_cov(id, cov);
 
 			cycles = rdtsc1(); // reset_cycles
 			runner.reset(parent);
@@ -136,7 +134,7 @@ int main(){
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 
-	// Create crash folder
+	// Create folders
 	create_folder("./crashes");
 	create_folder("./jitcache");
 
@@ -152,7 +150,6 @@ int main(){
 		{},
 		vector<jit_block_t>(emu.memsize()),
 	};
-	cov_t cov(256*1024);
 
 	// Run until open before forking
 	// test:    0x00423e8c | 0x41d6e4 | 0x00423e7c
@@ -173,7 +170,7 @@ int main(){
 	vector<thread> threads;
 	for (int i = 0; i < num_threads; i++){
 		thread t = thread(worker, i, emu.fork(), ref(emu), ref(corpus),
-		                  ref(cov), ref(jit_cache), ref(stats));
+		                  ref(jit_cache), ref(stats));
 		CPU_ZERO(&cpu);
 		CPU_SET(i, &cpu);
 		if (pthread_setaffinity_np(t.native_handle(), sizeof(cpu), &cpu) != 0)

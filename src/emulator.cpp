@@ -1,6 +1,5 @@
 #include <cstring>
 #include <iomanip>
-#include <assert.h>
 #include <unistd.h> // *_FILENO definitions
 #include <linux/limits.h> // PATH_MAX
 #include <string>
@@ -218,25 +217,27 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 	dbgprintf("set breakpoint %s at 0x%lX\n", symbol_name.c_str(), it->symbol_value);
 }
 
-bool add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
+void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
 	// Mark branch as seen and return true if it had not been seen before
-	uint32_t hash = branch_hash(from, to) % (cov.size());
+	uint32_t hash = branch_hash(from, to) & (cov.size()-1);
+	cov[hash] = 1;
 
-/*	// Print hashes once for each branch. Useful for counting hash collisions
-	static map<pair<vaddr_t, vaddr_t>, bool> m;
-	static atomic_flag flag = ATOMIC_FLAG_INIT;
+	// HASH COLLISION: print repeated hashes. Expensive, use only for debugging
+	/* static map<pair<vaddr_t, vaddr_t>, atomic_flag> m_branches;
+	static map<vaddr_t, atomic_flag> m_hashes;
+	static int rep_hashes = 0;
 	auto p = make_pair(from, to);
-	while (flag.test_and_set());
-	if (!m[p]){
-		m[p] = true;
-		cout << hash << endl;
-	}
-	flag.clear(); */
-
-	return !__atomic_test_and_set(&cov[hash], __ATOMIC_SEQ_CST);
+	if (!m_branches[p].test_and_set()){
+		if (m_hashes[hash].test_and_set()){
+			rep_hashes++;
+			cout << "Repeated hash (" << rep_hashes << "/" << m_hashes.size()
+			     << "): " << hash << ". Collision rate: "
+				 << (double)rep_hashes/m_hashes.size() << endl;
+		}
+	} */
 }
 
-void Emulator::run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats){
+void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	// Handle breakpoint. Record coverage if it changed pc, same as we do in
 	// branches
 	cycle_t cycles = rdtsc2();
@@ -244,7 +245,7 @@ void Emulator::run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats){
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
 		(this->*bps[pc])();
 		if (pc != pc_bf_bp)    // pc changed
-			new_cov += add_coverage(cov, pc_bf_bp, pc);
+			add_coverage(cov, pc_bf_bp, pc);
 	}
 	local_stats.bp_cycles += rdtsc2() - cycles;
 
@@ -266,7 +267,7 @@ void Emulator::run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats){
 
 	// No matter if the branch was taken or not, record coverage
 	if (rec_cov){
-		new_cov += add_coverage(cov, prev_pc, pc);
+		add_coverage(cov, prev_pc, pc);
 		rec_cov = false;
 	}
 	local_stats.jump_cycles += rdtsc2() - cycles;
@@ -279,7 +280,7 @@ void Emulator::run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats){
 }
 
 void Emulator::run_interpreter(const string& input, cov_t& cov,
-                               uint32_t& new_cov, Stats& local_stats)
+                               Stats& local_stats)
 {
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
@@ -293,7 +294,7 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 	while (running){
 		if (false)
 			cout << *this;
-		run_inst(cov, new_cov, local_stats);
+		run_inst(cov, local_stats);
 		local_stats.instr += 1;
 
 		instr_exec += 1;
@@ -314,8 +315,8 @@ const char* regs_map[] = {
 	"gp", "sp", "fp", "ra",
 	"hi", "lo"
 };
-void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
-                       jit_cache_t& jit_cache, Stats& local_stats)
+void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
+                       Stats& local_stats)
 {
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
@@ -335,8 +336,8 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 	};
 	exit_info exit_inf;
 	uint8_t*  cov_map = cov.data();
-	uint32_t regs_state[2000][35];
-	uint64_t ret;
+	uint32_t  regs_state[2000][35];
+	uint64_t  ret;
 
 	running = true;
 	jit_block_t jit_block;
@@ -359,7 +360,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
 		cycles = rdtsc1(); // run_cycles
-		ret = jit_block(&state, &exit_inf, cov_map, &new_cov, regs_state);
+		ret = jit_block(&state, &exit_inf, cov_map, regs_state);
 		local_stats.instr += ret;
 		local_stats.run_cycles += rdtsc1() - cycles;
 
@@ -375,7 +376,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 				// JIT just tells us there's a fault with no additional info.
 				// Run interpreter from last reenter pc and let it throw a more
 				// accurate fault
-				run_interpreter(input, cov, new_cov, local_stats);
+				run_interpreter(input, cov, local_stats);
 				die("JIT said fault but interpreter didn't\n");
 			case exit_info::ExitReason::Exception:
 				die("Exception??\n");
@@ -390,7 +391,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 					// Breakpoint handler changed PC. Update reenter_pc and
 					// report coverage
 					exit_inf.reenter_pc = pc;
-					new_cov += add_coverage(cov, exit_inf.reenter_pc-4, pc);
+					add_coverage(cov, exit_inf.reenter_pc-4, pc);
 				}
 				break;
 			}
@@ -419,11 +420,10 @@ void Emulator::run_jit(const string& input, cov_t& cov, uint32_t& new_cov,
 
 uint64_t Emulator::run_until(vaddr_t pc){
 	cov_t dummy1(256*1024);
-	uint32_t dummy2;
 	Stats dummy3;
 	running = true;
 	while (this->pc != pc && running){
-		run_inst(dummy1, dummy2, dummy3);
+		run_inst(dummy1, dummy3);
 		dummy3.instr++;
 	}
 	if (!running)

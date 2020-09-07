@@ -49,7 +49,6 @@ typedef uint32_t (*jit_block_t)(
 	vm_state*  p_vm_state,
 	exit_info* p_exit_info,
 	uint8_t*   cov_map,
-	uint32_t*  p_new_cov,
 	uint32_t   regs_dump[][35]
 );
 

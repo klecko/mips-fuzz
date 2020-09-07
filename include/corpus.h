@@ -33,7 +33,8 @@ typedef std::vector<std::pair<vaddr_t, Fault>> crashes_t;
 
 class Corpus {
 	private:
-		static const int MUTATED_BYTES = 128;
+		static const int COVERAGE_MAP_SIZE = 128*1024;
+		static const int MUTATED_BYTES     = 128;
 
 		// Corpus and its lock
 		std::vector<std::string> corpus;
@@ -46,6 +47,10 @@ class Corpus {
 		crashes_t uniq_crashes;
 		std::atomic_flag lock_uniq_crashes;
 
+		// Recorded coverage across runs
+		std::atomic<size_t> cov_n;
+		std::vector<std::atomic_flag> recorded_cov;
+
 		// Mutate input in `mutated_inputs[id]`
 		void mutate_input(int id, Rng& rng);
 
@@ -57,19 +62,22 @@ class Corpus {
 
 		size_t size() const;
 		size_t memsize() const;
-		size_t uniq_crashes_size() const;
+
+		size_t get_cov_map_size() const;
+		size_t get_cov() const;
+		size_t get_uniq_crashes_size() const;
 
 		// Get a new mutated input, which will be a constant reference to
 		// `mutated_inputs[id]`
 		const std::string& get_new_input(int id, Rng& rng);
 
-		// Report new coverage: save corresponding input into corpus
-		void report_new_cov(int id);
+		// Report coverage. If it has any new branch, save corresponding input
+		// into corpus
+		void report_cov(int id, const cov_t& cov);
 
 		// Report a crash. If it is new, save it and write its associated input 
 		// to disk
 		void report_crash(int id, vaddr_t pc, const Fault& fault);
-
 };
 
 #endif

@@ -109,7 +109,6 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 			p_vm_state_ty,  // p_vm_state
 			p_exit_info_ty, // p_exit_info
 			int8ptr_ty,     // cov_map
-			int32ptr_ty,    // p_new_cov
 			int32ptr_ty,    // regs_dump
 		},
 		false               // varargs
@@ -398,27 +397,11 @@ void Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
 	llvm::Value* branch_hash =
 		builder.CreateAnd(tmp4, builder.getInt32(cov_map_size-1));
 
-	// Test and set the corresponding byte in cov_map
+	// Set the corresponding byte in cov_map
 	llvm::Value* cov_map     = &function->arg_begin()[2];
 	llvm::Value* p_cov_value = builder.CreateInBoundsGEP(cov_map, branch_hash,
 	                                                     "p_cov_value");
-	// RACE CONDITION HERE between the load and the store. Probably we'll switch
-	// to local coverage
-	llvm::Value* old = builder.CreateLoad(p_cov_value);
 	builder.CreateStore(builder.getInt8(1), p_cov_value);
-
-	//llvm::Value* old_was_zero = builder.CreateICmpEQ(old, builder.getInt8(0));
-	llvm::Value* old_was_zero = builder.CreateNot(builder.CreateTrunc(old, int1_ty));
-
-	// Increment new_cov if old was zero
-	llvm::Value* p_new_cov   = &function->arg_begin()[3];
-	llvm::Value* new_cov     = builder.CreateLoad(p_new_cov, "new_cov");
-	llvm::Value* new_cov_inc = builder.CreateAdd(
-		new_cov,
-		builder.CreateZExt(old_was_zero, int32_ty),
-		"new_cov_inc"
-	);
-	builder.CreateStore(new_cov_inc, p_new_cov);
 }
 
 void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len){
@@ -656,7 +639,7 @@ bool Jitter::handle_inst(vaddr_t pc){
 	if (false){
 		llvm::Value* num_inst = builder.CreateLoad(p_instr);
 		llvm::Value* i_dump = builder.CreateMul(num_inst, builder.getInt64(35));
-		llvm::Value* regs_dump = &function->arg_begin()[4];
+		llvm::Value* regs_dump = &function->arg_begin()[3];
 		llvm::Value* reg_dump  = builder.CreateInBoundsGEP(regs_dump, i_dump);
 		for (int i = 0; i < 34; i++){
 			llvm::Value* p_reg = builder.CreateInBoundsGEP(reg_dump, builder.getInt32(i));

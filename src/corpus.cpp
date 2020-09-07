@@ -10,10 +10,10 @@
 
 using namespace std;
 
-Corpus::Corpus(int nthreads, const string& path){
-	// One element for each thread
-	mutated_inputs.resize(nthreads);
-
+Corpus::Corpus(int nthreads, const string& path):
+	lock_corpus(false), mutated_inputs(nthreads), lock_uniq_crashes(false),
+	cov_n(0), recorded_cov(COVERAGE_MAP_SIZE)
+{
 	// Try to open the directory
 	DIR* dir = opendir(path.c_str());
 	if (!dir)
@@ -45,9 +45,6 @@ Corpus::Corpus(int nthreads, const string& path){
 	}
 	closedir(dir);
 
-	lock_corpus.clear();
-	lock_uniq_crashes.clear();
-
 	if (corpus.size() == 0)
 		die("Empty corpus\n");
 	cout << "Total files read: " << corpus.size() << endl;
@@ -64,7 +61,15 @@ size_t Corpus::memsize() const {
 	return sz;
 }
 
-size_t Corpus::uniq_crashes_size() const {
+size_t Corpus::get_cov_map_size() const {
+	return recorded_cov.size();
+}
+
+size_t Corpus::get_cov() const {
+	return cov_n;
+}
+
+size_t Corpus::get_uniq_crashes_size() const {
 	return uniq_crashes.size();
 }
 
@@ -91,9 +96,19 @@ const std::string& Corpus::get_new_input(int id, Rng& rng){
 	return mutated_inputs[id];
 }
 
-void Corpus::report_new_cov(int id){
-	// New coverage, save it and add associated input to corpus
-	add_input(mutated_inputs[id]);
+void Corpus::report_cov(int id, const cov_t& cov){
+	assert(cov.size() == recorded_cov.size());
+	size_t cov_size = cov.size();
+
+	// If there's any new coverage, record it and increment coverage counter
+	size_t old_cov_n = cov_n; // maybe avoid memory order seq cst?
+	for (int i = 0; i < cov_size; i++)
+		if (cov[i] && (!recorded_cov[i].test_and_set()))
+			cov_n++;
+
+	// If there was new coverage, add associated input to corpus
+	if (cov_n > old_cov_n)
+		add_input(mutated_inputs[id]);
 }
 
 void Corpus::report_crash(int id, vaddr_t pc, const Fault& fault){

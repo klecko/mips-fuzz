@@ -19,9 +19,6 @@ typedef void (Emulator::*const inst_handler_t)(uint32_t);
 
 struct RunTimeout : std::exception {};
 
-// Data structure used for measuring global coverage. It is indexed by
-// branch_hash(from, to).
-typedef std::vector<uint8_t> cov_t;
 inline uint32_t branch_hash(vaddr_t from, vaddr_t to){
 	return (from ^ (to + (from << 6) + (from >> 2)));
 }
@@ -132,7 +129,7 @@ class Emulator {
 
 		void handle_rdhwr(uint8_t hwr, uint8_t reg);
 
-		void run_inst(cov_t& cov, uint32_t& new_cov, Stats& local_stats);
+		void run_inst(cov_t& cov, Stats& local_stats);
 
 
 	public:
@@ -164,10 +161,10 @@ class Emulator {
 
 		// Perform run with provided input using the interpreter
 		void run_interpreter(const std::string& input, cov_t& cov,
-		                     uint32_t& new_cov, Stats& local_stats);
+		                     Stats& local_stats);
 
 		// Perform run with provided input using the JIT
-		void run_jit(const std::string& input, cov_t& cov, uint32_t& new_cov,
+		void run_jit(const std::string& input, cov_t& cov,
 		             jit_cache_t& jit_cache, Stats& local_stats);
 
 		// Run emulator until given address, return the number of instructions
