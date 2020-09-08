@@ -339,6 +339,9 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 	uint32_t  regs_state[2000][35];
 	uint64_t  ret;
 
+	// Number of instructions executed in current run
+	uint64_t instr_exec = 0;
+
 	running = true;
 	jit_block_t jit_block;
 	cycle_t cycles;
@@ -360,8 +363,9 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
 		cycles = rdtsc1(); // run_cycles
-		ret = jit_block(&state, &exit_inf, cov_map, regs_state);
+		ret    = jit_block(&state, &exit_inf, cov_map, regs_state);
 		local_stats.instr += ret;
+		instr_exec        += ret;
 		local_stats.run_cycles += rdtsc1() - cycles;
 
 		// Handle the vm exit
@@ -376,7 +380,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 				// JIT just tells us there's a fault with no additional info.
 				// Run interpreter from last reenter pc and let it throw a more
 				// accurate fault
-				run_interpreter(input, cov, local_stats);
+				run_interpreter(input, cov, local_stats); // this will throw
 				die("JIT said fault but interpreter didn't\n");
 			case exit_info::ExitReason::Exception:
 				die("Exception??\n");
@@ -399,6 +403,10 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 				die("Unknown exit reason: %d\n", exit_inf.reason);
 		}
 		local_stats.vm_exit_cycles += rdtsc2() - cycles;
+
+		// Check timeout
+		if (instr_exec >= INSTR_TIMEOUT)
+			throw RunTimeout();
 
 		// DUMP
 		if (false){
