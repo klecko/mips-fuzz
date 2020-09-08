@@ -101,13 +101,15 @@ void Corpus::report_cov(int id, const cov_t& cov){
 	size_t cov_size = cov.size();
 
 	// If there's any new coverage, record it and increment coverage counter
-	size_t old_cov_n = cov_n; // maybe avoid memory order seq cst?
+	bool new_cov = false;
 	for (int i = 0; i < cov_size; i++)
-		if (cov[i] && (!recorded_cov[i].test_and_set()))
+		if (cov[i] && (!recorded_cov[i].test_and_set())){
 			cov_n++;
+			new_cov |= true;
+		}
 
 	// If there was new coverage, add associated input to corpus
-	if (cov_n > old_cov_n)
+	if (new_cov)
 		add_input(mutated_inputs[id]);
 }
 

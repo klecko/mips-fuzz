@@ -34,9 +34,11 @@ struct exit_info {
 		Syscall = 0,
 		Fault,
 		IndirectBranch,
+		Call,
 		Rdhwr,
 		Exception, // trap or break
 		Breakpoint,
+		CheckRepCovId, // debugging coverage ids
 	};
 	ExitReason reason;
 	vaddr_t    reenter_pc;
@@ -63,10 +65,14 @@ class Jitter;
 typedef bool (Jitter::*const inst_handler_jit_t)(vaddr_t, uint32_t);
 
 class Jitter {
+	public:
+		static uint32_t next_cov_id;
 	private:
 		const Mmu& mmu;
 		size_t cov_map_size;
-		const std::vector<bool> bps_bitmap;
+		const std::vector<bool>& bps_bitmap;
+
+		static std::unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> cov_ids;
 
 		std::unique_ptr<llvm::LLVMContext> p_context;
 		std::unique_ptr<llvm::Module>      p_module;
@@ -120,7 +126,21 @@ class Jitter {
 		void vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		             llvm::Value* info1=NULL, llvm::Value* info2=NULL);
 
-		void add_coverage(llvm::Value* from, llvm::Value* to);
+		uint32_t get_new_cov_id(size_t cov_map_size);
+
+		// For indirect branches. It generates a hash based on `from` and `to`
+		// which is used as coverage id
+		llvm::Value* add_coverage(llvm::Value* from, llvm::Value* to);
+
+		// For conditional branches. It gets unused coverage ids
+		llvm::Value* add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
+		                          llvm::Value* cmp);
+
+		// For unconditional branches. It gets unused coverage id
+		llvm::Value* add_coverage(vaddr_t pc, vaddr_t jump);
+
+		// General method
+		llvm::Value* add_coverage(llvm::Value* cov_id);
 
 		// Generation of memory access checks. We also generate a fault vm exit
 		// so faults are notified at runtime if any check fails.

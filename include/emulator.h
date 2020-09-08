@@ -22,6 +22,11 @@ struct RunTimeout : std::exception {};
 inline uint32_t branch_hash(vaddr_t from, vaddr_t to){
 	return (from ^ (to + (from << 6) + (from >> 2)));
 }
+struct branch_hasher {
+	uint32_t operator()(const std::pair<vaddr_t, vaddr_t>& branch) const{
+		return branch_hash(branch.first, branch.second);
+	}
+};
 
 class Emulator {
 	private:
@@ -129,7 +134,7 @@ class Emulator {
 
 		void handle_rdhwr(uint8_t hwr, uint8_t reg);
 
-		void run_inst(cov_t& cov, Stats& local_stats);
+		void run_inst(cov_t& cov, Stats& local_stats, bool record_cov=true);
 
 
 	public:

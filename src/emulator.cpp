@@ -29,6 +29,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	input_sz  = 0;
 	bps_bitmap.resize(mem_size);
 	load_elf(filepath, argv);
+	Jitter(0x40bd78, mmu, 128*1024, bps_bitmap);
 }
 
 vsize_t Emulator::memsize() const {
@@ -217,27 +218,52 @@ void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
 	dbgprintf("set breakpoint %s at 0x%lX\n", symbol_name.c_str(), it->symbol_value);
 }
 
-void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
-	// Mark branch as seen and return true if it had not been seen before
-	uint32_t hash = branch_hash(from, to) & (cov.size()-1);
-	cov[hash] = 1;
-
-	// HASH COLLISION: print repeated hashes. Expensive, use only for debugging
-	/* static map<pair<vaddr_t, vaddr_t>, atomic_flag> m_branches;
+void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
+	//Expensive, use only for debugging
+	static map<pair<vaddr_t, vaddr_t>, atomic_flag> m_branches;
 	static map<vaddr_t, atomic_flag> m_hashes;
+	static atomic_flag lock_report_repeated = ATOMIC_FLAG_INIT;
 	static int rep_hashes = 0;
 	auto p = make_pair(from, to);
 	if (!m_branches[p].test_and_set()){
-		if (m_hashes[hash].test_and_set()){
+		if (m_hashes[cov_id].test_and_set()){
+			while (lock_report_repeated.test_and_set());
 			rep_hashes++;
-			cout << "Repeated hash (" << rep_hashes << "/" << m_hashes.size()
-			     << "): " << hash << ". Collision rate: "
-				 << (double)rep_hashes/m_hashes.size() << endl;
+			cout << "Repeated hash (" << rep_hashes << "/" << m_branches.size()
+			     << "): " << cov_id << ". Collision rate: "
+				 << (double)rep_hashes/m_branches.size() << endl;
+			lock_report_repeated.clear();
+		} else {
+			//cout << "new hash: " << cov_id << endl;
 		}
-	} */
+	}
 }
 
-void Emulator::run_inst(cov_t& cov, Stats& local_stats){
+void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
+	// Unlike in the JIT, it isn't worth having unique coverage ids here.
+	// We would need to store them in a data structure, and check it every time
+	// we want to add coverage at runtime:
+	/*
+		static unordered_map<pair<vaddr_t, vaddr_t>, uint32_t, branch_hasher> cov_ids;
+		auto branch = make_pair(from, to);
+		if (!cov_ids.count(branch)){
+			cov_id = get_new_cov_id(cov.size());
+			cov_ids[branch] = cov_id;
+		} else
+			cov_id = cov_ids[branch];
+	*/
+	// That's very bad for perf. Instead, just use hash-based coverage ids here.
+	// We use the interpreter only for crash reporting anyways
+	uint32_t cov_id = branch_hash(from, to) & (cov.size()-1);
+
+	// Mark branch as seen
+	cov[cov_id] = 1;
+
+	// Only for debugging
+	//check_repeated_cov_id(cov_id, from, to);
+}
+
+void Emulator::run_inst(cov_t& cov, Stats& local_stats, bool record_cov){
 	// Handle breakpoint. Record coverage if it changed pc, same as we do in
 	// branches
 	cycle_t cycles = rdtsc2();
@@ -245,7 +271,7 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
 		(this->*bps[pc])();
 		if (pc != pc_bf_bp)    // pc changed
-			add_coverage(cov, pc_bf_bp, pc);
+			if (record_cov) add_coverage(cov, pc_bf_bp, pc);
 	}
 	local_stats.bp_cycles += rdtsc2() - cycles;
 
@@ -267,7 +293,7 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 
 	// No matter if the branch was taken or not, record coverage
 	if (rec_cov){
-		add_coverage(cov, prev_pc, pc);
+		if (record_cov) add_coverage(cov, prev_pc, pc);
 		rec_cov = false;
 	}
 	local_stats.jump_cycles += rdtsc2() - cycles;
@@ -372,6 +398,8 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		cycles = rdtsc2(); // vm_exit_cycles
 		switch (exit_inf.reason){
 			case exit_info::ExitReason::IndirectBranch:
+			case exit_info::ExitReason::Call:
+				// Just continue compilation
 				break;
 			case exit_info::ExitReason::Syscall:
 				handle_syscall(regs[Reg::v0]);
@@ -379,15 +407,21 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 			case exit_info::ExitReason::Fault:
 				// JIT just tells us there's a fault with no additional info.
 				// Run interpreter from last reenter pc and let it throw a more
-				// accurate fault
-				run_interpreter(input, cov, local_stats); // this will throw
+				// accurate fault. I'm not sure if this is correct as state is
+				// not restored and some instructions are executed twice.
+				// THINK ABOUT THIS
+				throw Fault(Fault::Type::Unknown, -1);
+
+				// We can't do this because it will record coverage with
+				// interpreter cov ids
+				//run_interpreter(input, cov, local_stats); // this will throw
 				die("JIT said fault but interpreter didn't\n");
 			case exit_info::ExitReason::Exception:
 				die("Exception??\n");
 			case exit_info::ExitReason::Rdhwr:
 				handle_rdhwr(exit_inf.info1, exit_inf.info2);
 				break;
-			case exit_info::ExitReason::Breakpoint:{
+			case exit_info::ExitReason::Breakpoint: {
 				// Breakpoint address is reenter_pc - 4
 				vaddr_t pc_bf_bp = pc;
 				(this->*bps[exit_inf.reenter_pc-4])();
@@ -399,6 +433,13 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 				}
 				break;
 			}
+			case exit_info::ExitReason::CheckRepCovId: {
+				vaddr_t from = exit_inf.info1;
+				vaddr_t to   = exit_inf.reenter_pc;
+				uint32_t cov_id = exit_inf.info2;
+				check_repeated_cov_id(cov_id, from, to);
+				break;
+			}
 			default:
 				die("Unknown exit reason: %d\n", exit_inf.reason);
 		}
@@ -408,7 +449,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		if (instr_exec >= INSTR_TIMEOUT)
 			throw RunTimeout();
 
-		// DUMP
+		// DUMP REGS
 		if (false){
 			for (int h = 0; h < ret; h++){
 				cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
@@ -431,7 +472,7 @@ uint64_t Emulator::run_until(vaddr_t pc){
 	Stats dummy3;
 	running = true;
 	while (this->pc != pc && running){
-		run_inst(dummy1, dummy3);
+		run_inst(dummy1, dummy3, false);
 		dummy3.instr++;
 	}
 	if (!running)
