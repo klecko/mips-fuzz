@@ -223,7 +223,7 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	check_perms(dst, len, PERM_WRITE);
 
 	// Memory has been initialized, update perms
-	for (int addr = dst; addr < dst+len; addr++)
+	for (vaddr_t addr = dst; addr < dst+len; addr++)
 		perms[addr] |= PERM_INIT;
 
 	// Update dirty blocks
@@ -234,18 +234,41 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 }
 
 void Mmu::copy_mem(vaddr_t dst, vaddr_t src, vsize_t len){
+	// Check src bounds and perms for reading
 	check_bounds(src, len, PERM_READ);
-	check_perms(src, len, PERM_READ);
+	check_perms (src, len, PERM_READ);
 
+	// Check dst bounds and perms for writing
 	check_bounds(dst, len, PERM_WRITE);
 	check_perms(dst, len, PERM_WRITE);
 
-	for (int addr = dst; addr < dst+len; addr++)
+	// Memory has been initialized, update perms
+	for (vaddr_t addr = dst; addr < dst+len; addr++)
 		perms[addr] |= PERM_INIT;
 
+	// Update dirty blocks
 	set_dirty(dst, len);
 
+	// Copy memory
 	memcpy(memory+dst, memory+src, len);
+}
+
+void Mmu::set_mem(vaddr_t dst, uint8_t c, vsize_t len){
+	// Check out of bounds
+	check_bounds(dst, len, PERM_WRITE);
+
+	// Check perms
+	check_perms(dst, len, PERM_WRITE);
+
+	// Memory has been initialized, update perms
+	for (vaddr_t addr = dst; addr < dst+len; addr++)
+		perms[addr] |= PERM_INIT;
+
+	// Update dirty blocks
+	set_dirty(dst, len);
+
+	// Set memory
+	memset(memory+dst, c, len);
 }
 
 uint32_t Mmu::read_inst(vaddr_t addr) const {
@@ -281,7 +304,7 @@ vaddr_t Mmu::alloc(vsize_t size){
 		return 0;
 	}
 
-	vsize_t aligned_size  = size + 0xF & ~0xF;
+	vsize_t aligned_size  = (size + 0xF) & ~0xF;
 	vaddr_t current_alloc = next_alloc;
 
 	// Memory is by default readable and writable, but not initialized
@@ -372,7 +395,7 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 
 			// Update brk beyond any segment we load
 			vaddr_t segm_next_page = 
-				s.segment_virtaddr + s.segment_memsize + 0xFFF & ~0xFFF;
+				(s.segment_virtaddr + s.segment_memsize + 0xFFF) & ~0xFFF;
 			brk = max(brk, segm_next_page);
 		}
 	}
@@ -386,7 +409,7 @@ void Mmu::load_elf(const vector<segment_t>& segments){
 
 ostream& operator<<(ostream& os, const Mmu& mmu){
 	os << hex;
-	for (int i = 0x08048000; i < mmu.memory_len; i++){
+	for (vaddr_t i = 0x08048000; i < mmu.memory_len; i++){
 		if (i % 0x10 == 0)
 			os << endl << "0x" << setw(2) << setfill('0') << i << ": ";
 		os << setw(2) << setfill('0') << (uint64_t)mmu.memory[i] << " ";

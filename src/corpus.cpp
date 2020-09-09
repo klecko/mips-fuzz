@@ -102,7 +102,7 @@ void Corpus::report_cov(int id, const cov_t& cov){
 
 	// If there's any new coverage, record it and increment coverage counter
 	bool new_cov = false;
-	for (int i = 0; i < cov_size; i++)
+	for (size_t i = 0; i < cov_size; i++)
 		if (cov[i] && (!recorded_cov[i].test_and_set())){
 			cov_n++;
 			new_cov |= true;

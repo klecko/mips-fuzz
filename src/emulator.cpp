@@ -8,6 +8,8 @@
 #include "elf_parser.hpp"
 #include "guest.h"
 
+#include <signal.h>
+
 using namespace std;
 
 Emulator::Emulator(vsize_t mem_size, const string& filepath,
@@ -29,7 +31,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	input_sz  = 0;
 	bps_bitmap.resize(mem_size);
 	load_elf(filepath, argv);
-	Jitter(0x40bd78, mmu, 128*1024, bps_bitmap);
+	//Jitter(0x40bd78, mmu, 128*1024, bps_bitmap);
 }
 
 vsize_t Emulator::memsize() const {
@@ -160,7 +162,7 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	argv_vm.push_back(0); // Argv last element must be NULL
 
 	// Align sp
-	regs[Reg::sp] = regs[Reg::sp] - 0x3 & ~0x3;
+	regs[Reg::sp] = (regs[Reg::sp] - 0x3) & ~0x3;
 
 	// Set up auxp. They aren't necessary, I did them tried to solve something
 	// unrelated.
@@ -199,6 +201,7 @@ void Emulator::set_bps(const vector<symbol_t>& symbols){
 	set_bp_sym("pvalloc", &Emulator::pvalloc_bp, symbols);
 	set_bp_sym("__calloc", &Emulator::calloc_bp, symbols);
 	set_bp_sym("memcpy", &Emulator::memcpy_bp, symbols);
+	set_bp_sym("memset", &Emulator::memset_bp, symbols);
 }
 
 void Emulator::set_bp_addr(vaddr_t addr, breakpoint_t bp){
@@ -363,7 +366,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 	exit_info exit_inf;
 	uint8_t*  cov_map = cov.data();
 	uint32_t  regs_state[2000][35];
-	uint64_t  ret;
+	uint32_t  ret;
 
 	// Number of instructions executed in current run
 	uint64_t instr_exec = 0;
@@ -451,7 +454,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 
 		// DUMP REGS
 		if (false){
-			for (int h = 0; h < ret; h++){
+			for (uint32_t h = 0; h < ret; h++){
 				cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
 				cout << "PC:  " << setw(8) << regs_state[h][34] << endl;
 				for (int i = 0; i < 34; i++){
@@ -550,6 +553,18 @@ void Emulator::memcpy_bp(){
 	prev_pc = pc;
 	pc      = regs[Reg::ra];
 	dbgprintf("memcpy(0x%X, 0x%X, %u)\n", dst, src, len);
+}
+
+void Emulator::memset_bp(){
+	vaddr_t dst = regs[Reg::a0];
+	uint8_t c   = regs[Reg::a1];
+	vsize_t len = regs[Reg::a2];
+	mmu.set_mem(dst, c, len);
+
+	regs[Reg::v0] = dst;
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
+	dbgprintf("memset(0x%X, %X, %u)\n", dst, (uint32_t)c, len);
 }
 
 uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){

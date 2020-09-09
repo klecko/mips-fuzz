@@ -101,6 +101,7 @@ class Emulator {
 		void pvalloc_bp();  // pvalloc
 		void calloc_bp();   // __calloc
 		void memcpy_bp();   // memcpy
+		void memset_bp();   // memset
 
 		// Syscalls
 		uint32_t sys_brk(vaddr_t new_brk, uint32_t& error);

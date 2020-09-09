@@ -65,13 +65,12 @@ class Jitter;
 typedef bool (Jitter::*const inst_handler_jit_t)(vaddr_t, uint32_t);
 
 class Jitter {
-	public:
-		static uint32_t next_cov_id;
 	private:
 		const Mmu& mmu;
 		size_t cov_map_size;
 		const std::vector<bool>& bps_bitmap;
 
+		static uint32_t next_cov_id;
 		static std::unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> cov_ids;
 
 		std::unique_ptr<llvm::LLVMContext> p_context;
@@ -128,16 +127,16 @@ class Jitter {
 
 		uint32_t get_new_cov_id(size_t cov_map_size);
 
-		// For indirect branches. It generates a hash based on `from` and `to`
-		// which is used as coverage id
-		llvm::Value* add_coverage(llvm::Value* from, llvm::Value* to);
-
 		// For conditional branches. It gets unused coverage ids
 		llvm::Value* add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
 		                          llvm::Value* cmp);
 
 		// For unconditional branches. It gets unused coverage id
 		llvm::Value* add_coverage(vaddr_t pc, vaddr_t jump);
+
+		// For indirect branches. It generates a hash based on `from` and `to`
+		// which is used as coverage id
+		llvm::Value* add_coverage(llvm::Value* from, llvm::Value* to);
 
 		// General method
 		llvm::Value* add_coverage(llvm::Value* cov_id);

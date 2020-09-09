@@ -52,6 +52,8 @@ llvm::Type* float_ty;
 llvm::Type* int1ptr_ty;
 llvm::Type* int8ptr_ty;
 llvm::Type* int32ptr_ty;
+llvm::Type* int16ptr_ty;
+llvm::Type* int64ptr_ty;
 llvm::Type* floatptr_ty;
 
 uint32_t load_next_cov_id(){
@@ -110,7 +112,9 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	float_ty     = llvm::Type::getFloatTy(context);
 	int1ptr_ty   = llvm::Type::getInt1PtrTy(context);
 	int8ptr_ty   = llvm::Type::getInt8PtrTy(context);
+	int16ptr_ty  = llvm::Type::getInt16PtrTy(context);
 	int32ptr_ty  = llvm::Type::getInt32PtrTy(context);
+	int64ptr_ty  = llvm::Type::getInt64PtrTy(context);
 	floatptr_ty  = llvm::Type::getFloatPtrTy(context);
 
 	// Get function arguments types
@@ -405,7 +409,7 @@ void Jitter::vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 			},
 			"p_info1_"
 		);
-		builder.CreateStore(info1 ? info1 : builder.getInt32(0), p_info1);
+		builder.CreateStore(info1, p_info1);
 	}
 
 	if (info2){
@@ -417,7 +421,7 @@ void Jitter::vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 			},
 			"p_info2_"
 		);
-		builder.CreateStore(info2 ? info2 : builder.getInt32(0), p_info2);
+		builder.CreateStore(info2, p_info2);
 	}
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
@@ -529,7 +533,7 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm){
 
 	// Compute permission mask for given len
 	uint32_t perms_mask = 0;
-	for (int i = 0; i < len; i++)
+	for (vsize_t i = 0; i < len; i++)
 		perms_mask |= (perm << (i*8));
 	llvm::Value* perms_mask_val = llvm::ConstantInt::get(mask_ty, perms_mask);
 
