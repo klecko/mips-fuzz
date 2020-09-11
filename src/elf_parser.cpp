@@ -21,14 +21,36 @@
 // SOFTWARE.
 
 #include "elf_parser.hpp"
+#include <linux/limits.h> // PATH_MAX
+#include <cstring>
 
+using namespace std;
+
+Elf_parser::Elf_parser(const string& elf_path): m_elf_path(elf_path) {   
+    // Save absolute file path. Ugly conversions here
+	char abspath[PATH_MAX];
+	if (!realpath(elf_path.c_str(), abspath))
+		die("error realpath: %s\n", strerror(errno));
+	m_elf_abs_path.assign(abspath);
+    
+    // Load memory map
+    load_memory_map();
+}
+
+string Elf_parser::get_path(){
+    return m_elf_path;
+}
+
+string Elf_parser::get_abs_path(){
+    return m_elf_abs_path;
+}
 
 long Elf_parser::get_entry() {
-    return ((Elf_Ehdr*)m_mmap_program)->e_entry;
+    return ((Elf32_Ehdr*)m_mmap_program)->e_entry;
 }
 
 phinfo_t Elf_parser::get_phinfo(){
-    Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;
+    Elf32_Ehdr* ehdr = (Elf32_Ehdr*)m_mmap_program;
     phinfo_t result = {
         ehdr->e_phoff,
         ehdr->e_phentsize,
@@ -38,54 +60,50 @@ phinfo_t Elf_parser::get_phinfo(){
 }
 
 std::vector<section_t> Elf_parser::get_sections() {
-    Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;
-    Elf_Shdr *shdr = (Elf_Shdr*)(m_mmap_program + ehdr->e_shoff);
-    int shnum = ehdr->e_shnum;
+    Elf32_Ehdr* ehdr  = (Elf32_Ehdr*)(m_mmap_program);
+    Elf32_Shdr* shdr  = (Elf32_Shdr*)(m_mmap_program + ehdr->e_shoff);
+    Elf32_Half  shnum = ehdr->e_shnum;
 
-    Elf_Shdr *sh_strtab = &shdr[ehdr->e_shstrndx];
-    const char *const sh_strtab_p = (char*)m_mmap_program + sh_strtab->sh_offset;
+    Elf32_Shdr* sh_strtab   = &shdr[ehdr->e_shstrndx];
+    const char* sh_strtab_p = (char*)m_mmap_program + sh_strtab->sh_offset;
 
     std::vector<section_t> sections;
-    for (int i = 0; i < shnum; ++i) {
+    for (uint16_t i = 0; i < shnum; ++i) {
         section_t section;
-        section.section_index= i;
-        section.section_name = std::string(sh_strtab_p + shdr[i].sh_name);
-        section.section_type = get_section_type(shdr[i].sh_type);
-        section.section_addr = shdr[i].sh_addr;
-        section.section_offset = shdr[i].sh_offset;
-        section.section_size = shdr[i].sh_size;
-        section.section_ent_size = shdr[i].sh_entsize;
-        section.section_addr_align = shdr[i].sh_addralign; 
+        section.index      = i;
+        section.name       = std::string(sh_strtab_p + shdr[i].sh_name);
+        section.type       = get_section_type(shdr[i].sh_type);
+        section.addr       = shdr[i].sh_addr;
+        section.offset     = shdr[i].sh_offset;
+        section.size       = shdr[i].sh_size;
+        section.ent_size   = shdr[i].sh_entsize;
+        section.addr_align = shdr[i].sh_addralign; 
         sections.push_back(section);
     }
     return sections;
 }
 
 std::vector<segment_t> Elf_parser::get_segments(Elf32_Addr& load_addr) {
-    Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;
-    Elf_Phdr *phdr = (Elf_Phdr*)(m_mmap_program + ehdr->e_phoff);
-    int phnum = ehdr->e_phnum;
-
-    Elf_Shdr *shdr = (Elf_Shdr*)(m_mmap_program + ehdr->e_shoff);
-    Elf_Shdr *sh_strtab = &shdr[ehdr->e_shstrndx];
-    const char *const sh_strtab_p = (char*)m_mmap_program + sh_strtab->sh_offset;
+    Elf32_Ehdr*ehdr = (Elf32_Ehdr*)(m_mmap_program);
+    Elf32_Phdr*phdr = (Elf32_Phdr*)(m_mmap_program + ehdr->e_phoff);
+    uint16_t phnum  = ehdr->e_phnum;
 
     load_addr = UINT32_MAX;
     std::vector<segment_t> segments;
-    for (int i = 0; i < phnum; ++i) {
+    for (uint16_t i = 0; i < phnum; ++i) {
         segment_t segment;
-        segment.segment_type     = get_segment_type(phdr[i].p_type);
-        segment.segment_offset   = phdr[i].p_offset;
-        segment.segment_virtaddr = phdr[i].p_vaddr;
-        segment.segment_physaddr = phdr[i].p_paddr;
-        segment.segment_filesize = phdr[i].p_filesz;
-        segment.segment_memsize  = phdr[i].p_memsz;
-        segment.segment_flags    = get_segment_flags(phdr[i].p_flags);
-        segment.segment_align    = phdr[i].p_align;
-        segment.data             = m_mmap_program+segment.segment_offset;
+        segment.type     = get_segment_type(phdr[i].p_type);
+        segment.offset   = phdr[i].p_offset;
+        segment.virtaddr = phdr[i].p_vaddr;
+        segment.physaddr = phdr[i].p_paddr;
+        segment.filesize = phdr[i].p_filesz;
+        segment.memsize  = phdr[i].p_memsz;
+        segment.flags    = get_segment_flags(phdr[i].p_flags);
+        segment.align    = phdr[i].p_align;
+        segment.data             = m_mmap_program+segment.offset;
         segments.push_back(segment);
-        if (segment.segment_virtaddr < load_addr)
-            load_addr = segment.segment_virtaddr;
+        if (segment.virtaddr < load_addr)
+            load_addr = segment.virtaddr;
     }
     return segments;
 }
@@ -93,52 +111,48 @@ std::vector<segment_t> Elf_parser::get_segments(Elf32_Addr& load_addr) {
 std::vector<symbol_t> Elf_parser::get_symbols() {
     std::vector<section_t> secs = get_sections();
 
-    // get headers for offsets
-    Elf_Ehdr *ehdr = (Elf_Ehdr*)m_mmap_program;
-    Elf_Shdr *shdr = (Elf_Shdr*)(m_mmap_program + ehdr->e_shoff);
-
     // get strtab
     char *sh_strtab_p = nullptr;
-    for(auto &sec: secs) {
-        if((sec.section_type == "SHT_STRTAB") && (sec.section_name == ".strtab")){
-            sh_strtab_p = (char*)m_mmap_program + sec.section_offset;
+    for(const section_t& sec : secs) {
+        if((sec.type == "SHT_STRTAB") && (sec.name == ".strtab")){
+            sh_strtab_p = (char*)m_mmap_program + sec.offset;
             break;
         }
     }
 
     // get dynstr
     char *sh_dynstr_p = nullptr;
-    for(auto &sec: secs) {
-        if((sec.section_type == "SHT_STRTAB") && (sec.section_name == ".dynstr")){
-            sh_dynstr_p = (char*)m_mmap_program + sec.section_offset;
+    for(const section_t& sec: secs) {
+        if((sec.type == "SHT_STRTAB") && (sec.name == ".dynstr")){
+            sh_dynstr_p = (char*)m_mmap_program + sec.offset;
             break;
         }
     }
 
     std::vector<symbol_t> symbols;
-    for(auto &sec: secs) {
-        if((sec.section_type != "SHT_SYMTAB") && (sec.section_type != "SHT_DYNSYM"))
+    for(const section_t& sec : secs) {
+        if((sec.type != "SHT_SYMTAB") && (sec.type != "SHT_DYNSYM"))
             continue;
 
-        auto total_syms = sec.section_size / sizeof(Elf_Sym);
-        auto syms_data = (Elf_Sym*)(m_mmap_program + sec.section_offset);
+        vsize_t    total_syms = sec.size / sizeof(Elf32_Sym);
+        Elf32_Sym* syms_data  = (Elf32_Sym*)(m_mmap_program + sec.offset);
 
-        for (int i = 0; i < total_syms; ++i) {
+        for (vsize_t i = 0; i < total_syms; ++i) {
             symbol_t symbol;
-            symbol.symbol_num       = i;
-            symbol.symbol_value     = syms_data[i].st_value;
-            symbol.symbol_size      = syms_data[i].st_size;
-            symbol.symbol_type      = get_symbol_type(syms_data[i].st_info);
-            symbol.symbol_bind      = get_symbol_bind(syms_data[i].st_info);
-            symbol.symbol_visibility= get_symbol_visibility(syms_data[i].st_other);
-            symbol.symbol_index     = get_symbol_index(syms_data[i].st_shndx);
-            symbol.symbol_section   = sec.section_name;
-            
-            if(sec.section_type == "SHT_SYMTAB")
-                symbol.symbol_name = std::string(sh_strtab_p + syms_data[i].st_name);
-            
-            if(sec.section_type == "SHT_DYNSYM")
-                symbol.symbol_name = std::string(sh_dynstr_p + syms_data[i].st_name);
+            symbol.num        = i;
+            symbol.value      = syms_data[i].st_value;
+            symbol.size       = syms_data[i].st_size;
+            symbol.type       = get_symbol_type(syms_data[i].st_info);
+            symbol.bind       = get_symbol_bind(syms_data[i].st_info);
+            symbol.visibility = get_symbol_visibility(syms_data[i].st_other);
+            symbol.index      = get_symbol_index(syms_data[i].st_shndx);
+            symbol.section    = sec.name;
+
+            if(sec.type == "SHT_SYMTAB")
+                symbol.name  = std::string(sh_strtab_p + syms_data[i].st_name);
+
+            if(sec.type == "SHT_DYNSYM")
+                symbol.name  = std::string(sh_dynstr_p + syms_data[i].st_name);
             
             symbols.push_back(symbol);
         }
@@ -150,42 +164,34 @@ std::vector<relocation_t> Elf_parser::get_relocations() {
     auto secs = get_sections();
     auto syms = get_symbols();
     
-    int  plt_entry_size = 0;
-    long plt_vma_address = 0;
+    vsize_t plt_entry_size  = 0;
+    vaddr_t plt_vma_address = 0;
 
-    for (auto &sec : secs) {
-        if(sec.section_name == ".plt") {
-          plt_entry_size = sec.section_ent_size;
-          plt_vma_address = sec.section_addr;
+    for (const section_t& sec : secs) {
+        if(sec.name == ".plt") {
+          plt_entry_size  = sec.ent_size;
+          plt_vma_address = sec.addr;
           break;
         }
     }
 
     std::vector<relocation_t> relocations;
-    for (auto &sec : secs) {
-
-        if(sec.section_type != "SHT_RELA") 
+    for (const section_t& sec : secs) {
+        if(sec.type != "SHT_RELA") 
             continue;
 
-        auto total_relas = sec.section_size / sizeof(Elf_Rela);
-        auto relas_data  = (Elf_Rela*)(m_mmap_program + sec.section_offset);
+        vsize_t     total_relas = sec.size / sizeof(Elf32_Rela);
+        Elf32_Rela* relas_data  = (Elf32_Rela*)(m_mmap_program + sec.offset);
 
-        for (int i = 0; i < total_relas; ++i) {
+        for (vsize_t i = 0; i < total_relas; ++i) {
             relocation_t rel;
-            rel.relocation_offset = static_cast<std::intptr_t>(relas_data[i].r_offset);
-            rel.relocation_info   = static_cast<std::intptr_t>(relas_data[i].r_info);
-            rel.relocation_type   = \
-                get_relocation_type(relas_data[i].r_info);
-            
-            rel.relocation_symbol_value = \
-                get_rel_symbol_value(relas_data[i].r_info, syms);
-            
-            rel.relocation_symbol_name  = \
-                get_rel_symbol_name(relas_data[i].r_info, syms);
-            
-            rel.relocation_plt_address = plt_vma_address + (i + 1) * plt_entry_size;
-            rel.relocation_section_name = sec.section_name;
-            
+            rel.offset = relas_data[i].r_offset;
+            rel.info   = relas_data[i].r_info;
+            rel.type   = get_relocation_type(relas_data[i].r_info);
+            rel.symbol_value = get_rel_symbol_value(relas_data[i].r_info, syms);
+            rel.symbol_name  = get_rel_symbol_name (relas_data[i].r_info, syms);
+            rel.plt_address  = plt_vma_address + (i + 1) * plt_entry_size;
+            rel.section_name = sec.name;
             relocations.push_back(rel);
         }
     }
@@ -197,105 +203,90 @@ uint8_t *Elf_parser::get_memory_map() {
 }
 
 void Elf_parser::load_memory_map() {
-    int fd, i;
     struct stat st;
+    int fd = open(m_elf_path.c_str(), O_RDONLY);
+    if (fd < 0){
+        perror("elf_parser: open");
+        exit(EXIT_FAILURE);
+    }
+    if (fstat(fd, &st) < 0){
+        perror("elf_parser: stat");
+        exit(EXIT_FAILURE);
+    }
 
-    if ((fd = open(m_program_path.c_str(), O_RDONLY)) < 0) {
-        printf("Err: open\n");
-        exit(-1);
-    }
-    if (fstat(fd, &st) < 0) {
-        printf("Err: fstat\n");
-        exit(-1);
-    }
-    m_mmap_program = static_cast<uint8_t*>(mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0));
+    m_mmap_program = 
+        (uint8_t*)mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (m_mmap_program == MAP_FAILED) {
-        printf("Err: mmap\n");
+        perror("elf_parser: mmap");
         exit(-1);
     }
 
-    auto header = (Elf_Ehdr*)m_mmap_program;
-    if (header->e_ident[EI_CLASS] != ELFCLASS) {
-        //#ifdef BITS32 // FIXME
-        printf("ERROR: elf_parser compiled for 32 bits trying to load 64 bits binary\n");
-        //#else
-        //printf("ERROR: elf_parser compiled for 64 bits trying to load 32 bits binary\n");
-        //#endif
-        exit(1);
-    }
+    Elf32_Ehdr* header = (Elf32_Ehdr*)m_mmap_program;
+    if (header->e_ident[EI_CLASS] != ELFCLASS32)
+        die("elf_parser: this is not an ELF32\n");
 }
 
-std::string Elf_parser::get_section_type(int tt) {
-    if(tt < 0)
-        return "UNKNOWN";
-
+std::string Elf_parser::get_section_type(Elf32_Word tt) {
     switch(tt) {
-        case 0: return "SHT_NULL";      /* Section header table entry unused */
-        case 1: return "SHT_PROGBITS";  /* Program data */
-        case 2: return "SHT_SYMTAB";    /* Symbol table */
-        case 3: return "SHT_STRTAB";    /* String table */
-        case 4: return "SHT_RELA";      /* Relocation entries with addends */
-        case 5: return "SHT_HASH";      /* Symbol hash table */
-        case 6: return "SHT_DYNAMIC";   /* Dynamic linking information */
-        case 7: return "SHT_NOTE";      /* Notes */
-        case 8: return "SHT_NOBITS";    /* Program space with no data (bss) */
-        case 9: return "SHT_REL";       /* Relocation entries, no addends */
-        case 11: return "SHT_DYNSYM";   /* Dynamic linker symbol table */
+        case 0:  return "SHT_NULL";     // Section header table entry unused
+        case 1:  return "SHT_PROGBITS"; // Program data
+        case 2:  return "SHT_SYMTAB";   // Symbol table
+        case 3:  return "SHT_STRTAB";   // String table
+        case 4:  return "SHT_RELA";     // Relocation entries with addends
+        case 5:  return "SHT_HASH";     // Symbol hash table
+        case 6:  return "SHT_DYNAMIC";  // Dynamic linking information
+        case 7:  return "SHT_NOTE";     // Notes
+        case 8:  return "SHT_NOBITS";   // Program space with no data (bss)
+        case 9:  return "SHT_REL";      // Relocation entries, no addends
+        case 11: return "SHT_DYNSYM";   // Dynamic linker symbol table
         default: return "UNKNOWN";
     }
-    return "UNKNOWN";
 }
 
-std::string Elf_parser::get_segment_type(Elf_Word seg_type) {
+std::string Elf_parser::get_segment_type(Elf32_Word seg_type) {
     switch(seg_type) {
-        case PT_NULL:   return "NULL";                  /* Program header table entry unused */ 
-        case PT_LOAD: return "LOAD";                    /* Loadable program segment */
-        case PT_DYNAMIC: return "DYNAMIC";              /* Dynamic linking information */
-        case PT_INTERP: return "INTERP";                /* Program interpreter */
-        case PT_NOTE: return "NOTE";                    /* Auxiliary information */
-        case PT_SHLIB: return "SHLIB";                  /* Reserved */
-        case PT_PHDR: return "PHDR";                    /* Entry for header table itself */
-        case PT_TLS: return "TLS";                      /* Thread-local storage segment */
-        case PT_NUM: return "NUM";                      /* Number of defined types */
-        case PT_LOOS: return "LOOS";                    /* Start of OS-specific */
-        case PT_GNU_EH_FRAME: return "GNU_EH_FRAME";    /* GCC .eh_frame_hdr segment */
-        case PT_GNU_STACK: return "GNU_STACK";          /* Indicates stack executability */
-        case PT_GNU_RELRO: return "GNU_RELRO";          /* Read-only after relocation */
-        //case PT_LOSUNW: return "LOSUNW";
-        case PT_SUNWBSS: return "SUNWBSS";              /* Sun Specific segment */
-        case PT_SUNWSTACK: return "SUNWSTACK";          /* Stack segment */
-        //case PT_HISUNW: return "HISUNW";
-        case PT_HIOS: return "HIOS";                    /* End of OS-specific */
-        case PT_LOPROC: return "LOPROC";                /* Start of processor-specific */
-        case PT_HIPROC: return "HIPROC";                /* End of processor-specific */
+        case PT_NULL:      return "NULL";      // Program header entry unused 
+        case PT_LOAD:      return "LOAD";      // Loadable program segment
+        case PT_DYNAMIC:   return "DYNAMIC";   // Dynamic linking information
+        case PT_INTERP:    return "INTERP";    // Program interpreter
+        case PT_NOTE:      return "NOTE";      // Auxiliary information
+        case PT_SHLIB:     return "SHLIB";     // Reserved
+        case PT_PHDR:      return "PHDR";      // Entry for header table itself
+        case PT_TLS:       return "TLS";       // Thread-local storage segment
+        case PT_NUM:       return "NUM";       // Number of defined types
+        case PT_LOOS:      return "LOOS";      // Start of OS-specific
+        case PT_GNU_EH_FRAME: return "GNU_EH_FRAME"; // GCC .eh_frame_hdr segmnt
+        case PT_GNU_STACK: return "GNU_STACK"; // Indicates stack executability
+        case PT_GNU_RELRO: return "GNU_RELRO"; // Read-only after relocation
+        case PT_SUNWBSS:   return "SUNWBSS";   // Sun Specific segment
+        case PT_SUNWSTACK: return "SUNWSTACK"; // Stack segment
+        case PT_HIOS:      return "HIOS";      // End of OS-specific
+        case PT_LOPROC:    return "LOPROC";    // Start of processor-specific
+        case PT_HIPROC:    return "HIPROC";    // End of processor-specific
         default: return "UNKNOWN";
     }
 }
 
-std::string Elf_parser::get_segment_flags(Elf_Word seg_flags) {
+std::string Elf_parser::get_segment_flags(Elf32_Word seg_flags) {
     std::string flags;
-
     if(seg_flags & PF_R)
         flags.append("R");
-
     if(seg_flags & PF_W)
         flags.append("W");
-
     if(seg_flags & PF_X)
         flags.append("E");
-
     return flags;
 }
 
 std::string Elf_parser::get_symbol_type(uint8_t sym_type) {
-    switch(ELF_ST_TYPE(sym_type)) {
-        case 0: return "NOTYPE";
-        case 1: return "OBJECT";
-        case 2: return "FUNC";
-        case 3: return "SECTION";
-        case 4: return "FILE";
-        case 6: return "TLS";
-        case 7: return "NUM";
+    switch(ELF32_ST_TYPE(sym_type)) {
+        case 0:  return "NOTYPE";
+        case 1:  return "OBJECT";
+        case 2:  return "FUNC";
+        case 3:  return "SECTION";
+        case 4:  return "FILE";
+        case 6:  return "TLS";
+        case 7:  return "NUM";
         case 10: return "LOOS";
         case 12: return "HIOS";
         default: return "UNKNOWN";
@@ -303,11 +294,11 @@ std::string Elf_parser::get_symbol_type(uint8_t sym_type) {
 }
 
 std::string Elf_parser::get_symbol_bind(uint8_t sym_bind) {
-    switch(ELF_ST_BIND(sym_bind)) {
-        case 0: return "LOCAL";
-        case 1: return "GLOBAL";
-        case 2: return "WEAK";
-        case 3: return "NUM";
+    switch(ELF32_ST_BIND(sym_bind)) {
+        case 0:  return "LOCAL";
+        case 1:  return "GLOBAL";
+        case 2:  return "WEAK";
+        case 3:  return "NUM";
         case 10: return "UNIQUE";
         case 12: return "HIOS";
         case 13: return "LOPROC";
@@ -316,56 +307,56 @@ std::string Elf_parser::get_symbol_bind(uint8_t sym_bind) {
 }
 
 std::string Elf_parser::get_symbol_visibility(uint8_t sym_vis) {
-    switch(ELF_ST_VISIBILITY(sym_vis)) {
-        case 0: return "DEFAULT";
-        case 1: return "INTERNAL";
-        case 2: return "HIDDEN";
-        case 3: return "PROTECTED";
+    switch(ELF32_ST_VISIBILITY(sym_vis)) {
+        case 0:  return "DEFAULT";
+        case 1:  return "INTERNAL";
+        case 2:  return "HIDDEN";
+        case 3:  return "PROTECTED";
         default: return "UNKNOWN";
     }
 }
 
-std::string Elf_parser::get_symbol_index(Elf_Half sym_idx) {
+std::string Elf_parser::get_symbol_index(Elf32_Half sym_idx) {
     switch(sym_idx) {
-        case SHN_ABS: return "ABS";
+        case SHN_ABS:    return "ABS";
         case SHN_COMMON: return "COM";
-        case SHN_UNDEF: return "UND";
+        case SHN_UNDEF:  return "UND";
         case SHN_XINDEX: return "COM";
-        default: return std::to_string(sym_idx);
+        default:         return std::to_string(sym_idx);
     }
 }
 
-std::string Elf_parser::get_relocation_type(Elf_Word rela_type) {
-    switch(ELF_R_TYPE(rela_type)) {
-        case 1: return "R_386_32";
-        case 2: return "R_386_PC32";
-        case 5: return "R_386_COPY";
-        case 6: return "R_386_GLOB_DAT";
+std::string Elf_parser::get_relocation_type(Elf32_Word rela_type) {
+    switch(ELF32_R_TYPE(rela_type)) {
+        case 1:  return "R_386_32";
+        case 2:  return "R_386_PC32";
+        case 5:  return "R_386_COPY";
+        case 6:  return "R_386_GLOB_DAT";
         case 7:  return "R_386_JMP_SLOT";
         default: return "OTHERS";
     }
 }
 
-std::intptr_t Elf_parser::get_rel_symbol_value(
-                Elf_Word sym_idx, std::vector<symbol_t> &syms) {
-    
-    std::intptr_t sym_val = 0;
-    for(auto &sym: syms) {
-        if(sym.symbol_num == ELF_R_SYM(sym_idx)) {
-            sym_val = sym.symbol_value;
+vaddr_t Elf_parser::get_rel_symbol_value(Elf32_Word sym_idx, 
+                                         const std::vector<symbol_t>& syms)
+{    
+    vaddr_t sym_val = 0;
+    for(const symbol_t& sym : syms) {
+        if(sym.num == ELF32_R_SYM(sym_idx)) {
+            sym_val = sym.value;
             break;
         }
     }
     return sym_val;
 }
 
-std::string Elf_parser::get_rel_symbol_name(
-                Elf_Word sym_idx, std::vector<symbol_t> &syms) {
-
+std::string Elf_parser::get_rel_symbol_name(Elf32_Word sym_idx,
+                                            const std::vector<symbol_t>& syms)
+{
     std::string sym_name;
-    for(auto &sym: syms) {
-        if(sym.symbol_num == ELF_R_SYM(sym_idx)) {
-            sym_name = sym.symbol_name;
+    for(const symbol_t& sym : syms) {
+        if(sym.num == ELF32_R_SYM(sym_idx)) {
+            sym_name = sym.name;
             break;
         }
     }

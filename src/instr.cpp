@@ -7,7 +7,7 @@
 using namespace std;
 
 // Instruction handlers indexed by opcode
-const inst_handler_t Emulator::inst_handlers[] = {
+const Emulator::inst_handler_t Emulator::inst_handlers[] = {
 	&Emulator::inst_R,             // 000 000
 	&Emulator::inst_RI,            // 000 001
 	&Emulator::inst_j,             // 000 010
@@ -75,7 +75,7 @@ const inst_handler_t Emulator::inst_handlers[] = {
 };
 
 // Type R instruction handlers indexed by functor
-const inst_handler_t Emulator::inst_handlers_R[] = {
+const Emulator::inst_handler_t Emulator::inst_handlers_R[] = {
 	&Emulator::inst_sll,           // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_srl,           // 000 010
@@ -143,7 +143,7 @@ const inst_handler_t Emulator::inst_handlers_R[] = {
 };
 
 // Type RI instruction handlers indexed by functor
-const inst_handler_t Emulator::inst_handlers_RI[] = {
+const Emulator::inst_handler_t Emulator::inst_handlers_RI[] = {
 	&Emulator::inst_bltz,          // 00 000
 	&Emulator::inst_bgez,          // 00 001
 	&Emulator::inst_unimplemented, // 00 010
@@ -179,7 +179,7 @@ const inst_handler_t Emulator::inst_handlers_RI[] = {
 };
 
 // Type special2 instructions indexed by functor
-const inst_handler_t Emulator::inst_handlers_special2[] = {
+const Emulator::inst_handler_t Emulator::inst_handlers_special2[] = {
 	&Emulator::inst_unimplemented, // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_mul,           // 000 010
@@ -246,7 +246,7 @@ const inst_handler_t Emulator::inst_handlers_special2[] = {
 	&Emulator::inst_unimplemented, // 111 111
 };
 
-const inst_handler_t Emulator::inst_handlers_special3[] = {
+const Emulator::inst_handler_t Emulator::inst_handlers_special3[] = {
 	&Emulator::inst_ext,           // 000 000
 	&Emulator::inst_unimplemented, // 000 001
 	&Emulator::inst_unimplemented, // 000 010
@@ -314,7 +314,7 @@ const inst_handler_t Emulator::inst_handlers_special3[] = {
 };
 
 // Type COP1 instructions indexed by rs/fmt field
-const inst_handler_t Emulator::inst_handlers_COP1[] = {
+const Emulator::inst_handler_t Emulator::inst_handlers_COP1[] = {
 	&Emulator::inst_mfc1,          // 00 000
 	&Emulator::inst_unimplemented, // 00 001
 	&Emulator::inst_cfc1,          // 00 010
@@ -618,7 +618,7 @@ void Emulator::inst_bshfl(uint32_t val){
 
 		default:
 			die("Unimplemented bshfl instruction at 0x%X: 0x%X\n",prev_pc, val);
-	}
+		}
 }
 
 void Emulator::inst_seh(uint32_t val){
@@ -968,8 +968,6 @@ void Emulator::inst_c_cond_d(uint32_t val){
 			set_cc(cc, isnan(val1) || isnan(val1));
 			break;
 		case 0b0111: // ule
-			/* set_cc(cc, isnan(val1) || isnan(val1) || (val1<val2) ||
-			           (val1==val2)); */
 			set_cc(cc, !(val1>val2));
 			break;
 		default:

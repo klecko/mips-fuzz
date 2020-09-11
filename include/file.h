@@ -13,43 +13,43 @@ void guest_stat_stdout(struct guest_stat64& st);
 
 
 class File {
-	private:
-		// Flags used when opened
-		uint32_t flags;
+public:
+	File(uint32_t flags = 0, char* buf = NULL, size_t size = 0);
 
-		// Pointer to file content
-		char*    buf;
+	// Get file cursor
+	char*   get_cursor();
 
-		// File size
-		size_t   size;
+	// Attempt to move the cursor. Returns the real increment performed
+	int64_t move_cursor(int64_t increment);
 
-		// Cursor offset
-		size_t   offset;
+	// Get and set offset. It can be set past `size`
+	size_t  get_offset();
+	void    set_offset(size_t new_offset);
 
-	public:
-		File(uint32_t flags = 0, char* buf = NULL, size_t size = 0);
+	// Get size
+	size_t  get_size();
 
-		// Get file cursor
-		char*   get_cursor();
+	// Stat
+	void    stat(guest_stat64& st);
 
-		// Attempt to move the cursor. Returns the real increment performed
-		int64_t move_cursor(int64_t increment);
+	// Flags
+	bool    is_readable();
+	bool    is_writable();
 
-		// Get and set offset. It can be set past `size`
-		size_t  get_offset();
-		void    set_offset(size_t new_offset);
+	friend std::ostream& operator<<(std::ostream& os, const File& emu);
 
-		// Get size
-		size_t  get_size();
+private:
+	// Flags used when opened
+	uint32_t flags;
 
-		// Stat
-		void    stat(guest_stat64& st);
+	// Pointer to file content
+	char*    buf;
 
-		// Flags
-		bool    is_readable();
-		bool    is_writable();
+	// File size
+	size_t   size;
 
-		friend std::ostream& operator<<(std::ostream& os, const File& emu);
+	// Cursor offset
+	size_t   offset;
 };
 
 #endif

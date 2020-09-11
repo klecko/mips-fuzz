@@ -3,8 +3,6 @@
 #include <iomanip>
 #include "mmu.h"
 #include "common.h"
-#include "elf_parser.hpp"
-#include "fault.h"
 
 using namespace std;
 
@@ -153,7 +151,7 @@ void Mmu::check_alignment(vaddr_t addr, vsize_t align, uint8_t perm) const {
 void Mmu::set_dirty(vaddr_t addr, vsize_t len){
 	// Set dirty those blocks that arent dirty
 	vsize_t block_begin = addr/DIRTY_BLOCK_SIZE;
-	vsize_t block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1;
+	vsize_t block_end   = (addr+len+DIRTY_BLOCK_SIZE-1)/DIRTY_BLOCK_SIZE;
 	for (vsize_t block = block_begin; block < block_end; block++){
 		if (!dirty_map[block]){
 			dirty_vec[dirty_size++] = block;
@@ -240,7 +238,7 @@ void Mmu::copy_mem(vaddr_t dst, vaddr_t src, vsize_t len){
 
 	// Check dst bounds and perms for writing
 	check_bounds(dst, len, PERM_WRITE);
-	check_perms(dst, len, PERM_WRITE);
+	check_perms (dst, len, PERM_WRITE);
 
 	// Memory has been initialized, update perms
 	for (vaddr_t addr = dst; addr < dst+len; addr++)
@@ -373,29 +371,32 @@ uint8_t parse_perm(const string& flag){
 }
 
 void Mmu::load_elf(const vector<segment_t>& segments){
-	for (const segment_t& s : segments){
-		if (s.segment_type == "LOAD"){
-			dbgprintf("Loading at 0x%X\n", s.segment_virtaddr);
+	for (const segment_t& segm : segments){
+		if (segm.type == "LOAD"){
+			dbgprintf("Loading at 0x%X\n", segm.virtaddr);
 
-			if (s.segment_virtaddr + s.segment_memsize > memory_len)
+			if (segm.virtaddr + segm.memsize > memory_len)
 				die("Not enough space for loading elf (trying to load at 0x%X, "
-					"max addr is 0x%X)\n", s.segment_virtaddr, memory_len-1);
+					"max addr is 0x%X)\n", segm.virtaddr, memory_len-1);
 
 			// Copy data into memory
-			memcpy(memory+s.segment_virtaddr, s.data, s.segment_filesize);
+			memcpy(memory+segm.virtaddr, segm.data, segm.filesize);
 
 			// Set padding
-			if (s.segment_memsize > s.segment_filesize)
-				memset(memory + s.segment_virtaddr + s.segment_filesize,
-					0, s.segment_memsize - s.segment_filesize);
+			if (segm.memsize > segm.filesize)
+				memset(
+					memory + segm.virtaddr + segm.filesize,
+					0,
+					segm.memsize - segm.filesize
+				);
 
 			// Set permissions
-			uint8_t perm = parse_perm(s.segment_flags);
-			set_perms(s.segment_virtaddr, s.segment_memsize, perm);
+			uint8_t perm = parse_perm(segm.flags);
+			set_perms(segm.virtaddr, segm.memsize, perm);
 
-			// Update brk beyond any segment we load
+			// Update brk beyond any segm we load
 			vaddr_t segm_next_page = 
-				(s.segment_virtaddr + s.segment_memsize + 0xFFF) & ~0xFFF;
+				(segm.virtaddr + segm.memsize + 0xFFF) & ~0xFFF;
 			brk = max(brk, segm_next_page);
 		}
 	}

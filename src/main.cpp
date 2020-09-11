@@ -17,7 +17,7 @@ Adapt the elf parser to my code
 void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
 	uint32_t elapsed = 0;
-	double minstrps, fcps, reset_time, run_time, inst_handl_time,
+	double minstrps, fcps, reset_time, run_time, cov_time, inst_handl_time,
 	       fetch_inst_time, jump_time, bp_time, corpus_sz,
 	       jit_cache_time, vm_exit_time;
 	uint64_t cases, uniq_crashes, crashes, timeouts, cov, corpus_n;
@@ -35,6 +35,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		timeouts        = stats.timeouts;
 		reset_time      = (double)stats.reset_cycles / stats.total_cycles;
 		run_time        = (double)stats.run_cycles / stats.total_cycles;
+		cov_time        = (double)stats.cov_cycles / stats.total_cycles;
 		inst_handl_time = (double)stats.inst_handl_cycles / stats.total_cycles;
 		fetch_inst_time = (double)stats.fetch_inst_cycles / stats.total_cycles;
 		jump_time       = (double)stats.jump_cycles / stats.total_cycles;
@@ -48,7 +49,8 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		       uniq_crashes, crashes, timeouts);
 
 		if (TIMETRACE >= 1)
-			printf("\treset: %.3f, run: %.3f\n", reset_time, run_time);
+			printf("\treset: %.3f, run: %.3f, cov: %.3f\n",
+			       reset_time, run_time, cov_time);
 
 		if (TIMETRACE >= 2)
 			printf("\tinst_handl: %.3f, fetch_inst: %.3f, jump: %.3f, bp: %.3f\n"
@@ -59,7 +61,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 }
 
 void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
-            jit_cache_t& jit_cache, Stats& stats)
+            JIT::jit_cache_t& jit_cache, Stats& stats)
 {
 	// Custom RNG: avoids locks and simpler
 	Rng rng;
@@ -83,7 +85,9 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			const string& input = corpus.get_new_input(id, rng);
 
 			// Clear coverage
+			cycles = rdtsc1(); // cov_cycles1
 			cov.assign(covsize, 0);
+			local_stats.cov_cycles += rdtsc1() - cycles;
 
 			try {
 				//runner.run_interpreter(input, cov, local_stats);
@@ -100,7 +104,10 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			}
 
 			local_stats.cases++;
+
+			cycles = rdtsc1(); // cov_cycles2
 			corpus.report_cov(id, cov);
+			local_stats.cov_cycles += rdtsc1() - cycles;
 
 			cycles = rdtsc1(); // reset_cycles
 			runner.reset(parent);
@@ -146,17 +153,14 @@ int main(){
 		"../test_bins/readelf",         // path to elf
 		{"readelf", "-e", "input_file"} // argv
 	);
-	jit_cache_t jit_cache = {
-		{},
-		vector<jit_block_t>(emu.memsize()),
-	};
+	JIT::jit_cache_t jit_cache(emu.memsize());
 
 	// Run until open before forking
 	// test:    0x00423e8c | 0x41d6e4 | 0x00423e7c
 	// xxd:     0x00429e6c
 	// readelf: 0x004c081c
 	try {
-		uint64_t insts = emu.run_until(0x004c081c);
+		uint64_t insts = emu.run_until(0x004c081c);//0x00423ec8);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault runing before forking" << endl;

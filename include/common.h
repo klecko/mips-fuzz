@@ -17,8 +17,7 @@ typedef uint32_t vaddr_t;
 // Type used for indexing guest virtual address
 typedef vaddr_t vsize_t;
 
-// Data structure used for measuring global coverage. It is indexed by
-// branch_hash(from, to).
+// Data structure used for measuring coverage
 typedef std::vector<uint8_t> cov_t;
 
 #if DEBUG == 1

@@ -32,52 +32,52 @@ class Rng {
 typedef std::vector<std::pair<vaddr_t, Fault>> crashes_t;
 
 class Corpus {
-	private:
-		static const int COVERAGE_MAP_SIZE = 64*1024;
-		static const int MUTATED_BYTES     = 128;
+public:
+	Corpus(int nthreads, const std::string& path);
 
-		// Corpus and its lock
-		std::vector<std::string> corpus;
-		std::atomic_flag lock_corpus;
+	size_t size() const;
+	size_t memsize() const;
 
-		// Vector with one mutated input for each thread
-		std::vector<std::string> mutated_inputs;
+	size_t get_cov_map_size() const;
+	size_t get_cov() const;
+	size_t get_uniq_crashes_size() const;
 
-		// Data structure for storing unique crashes and its lock
-		crashes_t uniq_crashes;
-		std::atomic_flag lock_uniq_crashes;
+	// Get a new mutated input, which will be a constant reference to
+	// `mutated_inputs[id]`
+	const std::string& get_new_input(int id, Rng& rng);
 
-		// Recorded coverage across runs
-		std::atomic<size_t> cov_n;
-		std::vector<std::atomic_flag> recorded_cov;
+	// Report coverage. If it has any new branch, save corresponding input
+	// into corpus
+	void report_cov(int id, const cov_t& cov);
 
-		// Mutate input in `mutated_inputs[id]`
-		void mutate_input(int id, Rng& rng);
+	// Report a crash. If it is new, save it and write its associated input 
+	// to disk
+	void report_crash(int id, vaddr_t pc, const Fault& fault);
 
-		// Add input to corpus
-		void add_input(const std::string& new_input);
+private:
+	static const int COVERAGE_MAP_SIZE = 64*1024;
+	static const int MUTATED_BYTES     = 128;
 
-	public:
-		Corpus(int nthreads, const std::string& path);
+	// Corpus and its lock
+	std::vector<std::string> corpus;
+	std::atomic_flag lock_corpus;
 
-		size_t size() const;
-		size_t memsize() const;
+	// Vector with one mutated input for each thread
+	std::vector<std::string> mutated_inputs;
 
-		size_t get_cov_map_size() const;
-		size_t get_cov() const;
-		size_t get_uniq_crashes_size() const;
+	// Data structure for storing unique crashes and its lock
+	crashes_t uniq_crashes;
+	std::atomic_flag lock_uniq_crashes;
 
-		// Get a new mutated input, which will be a constant reference to
-		// `mutated_inputs[id]`
-		const std::string& get_new_input(int id, Rng& rng);
+	// Recorded coverage across runs
+	std::atomic<size_t> cov_n;
+	std::vector<std::atomic_flag> recorded_cov;
 
-		// Report coverage. If it has any new branch, save corresponding input
-		// into corpus
-		void report_cov(int id, const cov_t& cov);
+	// Mutate input in `mutated_inputs[id]`
+	void mutate_input(int id, Rng& rng);
 
-		// Report a crash. If it is new, save it and write its associated input 
-		// to disk
-		void report_crash(int id, vaddr_t pc, const Fault& fault);
+	// Add input to corpus
+	void add_input(const std::string& new_input);
 };
 
 #endif

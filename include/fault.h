@@ -29,7 +29,7 @@ struct Fault: public std::exception {
 	std::string type_str() const;
 
 	friend std::ostream& operator<<(std::ostream& os, const Fault& f);
-	bool operator==(const Fault& other) const { return type == other.type && fault_addr == other.fault_addr; }
+	bool operator==(const Fault& other) const;
 };
 
 inline std::string Fault::type_str() const {
@@ -65,6 +65,10 @@ inline std::ostream& operator<<(std::ostream& os, const Fault& f){
 	os << f.type_str() << " Fault, fault address = 0x" << std::hex
 	   << f.fault_addr << std::dec;
 	return os;
+}
+
+inline bool Fault::operator==(const Fault& other) const {
+	return type == other.type && fault_addr == other.fault_addr;
 }
 
 #endif

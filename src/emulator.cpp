@@ -9,11 +9,23 @@
 #include "guest.h"
 
 #include <signal.h>
+#include <execinfo.h>
 
 using namespace std;
 
+inline uint32_t branch_hash(vaddr_t from, vaddr_t to){
+	return (from ^ (to + (from << 6) + (from >> 2)));
+}
+struct branch_hasher {
+	uint32_t operator()(const std::pair<vaddr_t, vaddr_t>& branch) const{
+		return branch_hash(branch.first, branch.second);
+	}
+};
+
+
 Emulator::Emulator(vsize_t mem_size, const string& filepath,
-                   const vector<string>& argv): mmu(mem_size)
+                   const vector<string>& argv):
+	mmu(mem_size), elf(filepath), breakpoints(mem_size, elf.get_symbols())
 {
 	memset(regs, 0, sizeof(regs));
 	hi        = 0;
@@ -29,9 +41,9 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	running   = false;
 	input     = NULL;
 	input_sz  = 0;
-	bps_bitmap.resize(mem_size);
-	load_elf(filepath, argv);
-	//Jitter(0x40bd78, mmu, 128*1024, bps_bitmap);
+	load_elf(argv);
+	set_bps();
+	//Jitter(0x41df90, mmu, 128*1024, breakpoints, this);
 }
 
 vsize_t Emulator::memsize() const {
@@ -115,25 +127,17 @@ void Emulator::reset(const Emulator& other){
 	running    = other.running;
 	input      = other.input;
 	input_sz   = other.input_sz;
-	load_addr  = other.load_addr;
 	open_files = other.open_files;
-	elfpath    = other.elfpath;
 }
 
 
-void Emulator::load_elf(const string& filepath, const vector<string>& argv){
+void Emulator::load_elf(const vector<string>& argv){
 	// Stack layout described in
 	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
 	// I add random numbers at the bottom of the stack for auxv
-	cout << "Loading " << filepath << endl;
-	Elf_parser elf(filepath);
+	cout << "Loading " << elf.get_path() << endl;
+	vaddr_t load_addr; // ELF load address
 	mmu.load_elf(elf.get_segments(load_addr));
-
-	// Save absolute file path. Ugly conversions here
-	char abspath[PATH_MAX];
-	if (!realpath(filepath.c_str(), abspath))
-		die("error realpath: %s\n", strerror(errno));
-	elfpath.assign(abspath);
 
 	// Set entry
 	pc = elf.get_entry();
@@ -186,39 +190,18 @@ void Emulator::load_elf(const string& filepath, const vector<string>& argv){
 	for (auto it = argv_vm.rbegin(); it != argv_vm.rend(); ++it)
 		push_stack<vaddr_t>(*it);
 	push_stack<uint32_t>(argv.size());
-
-	// Set breakpoints. Do it here because we have access to symbols
-	set_bps(elf.get_symbols());
 }
 
-
-void Emulator::set_bps(const vector<symbol_t>& symbols){
-	set_bp_sym("__libc_malloc", &Emulator::malloc_bp, symbols);
-	set_bp_sym("__free", &Emulator::free_bp, symbols);
-	set_bp_sym("__libc_realloc", &Emulator::realloc_bp, symbols);
-	set_bp_sym("__libc_memalign", &Emulator::memalign_bp, symbols);
-	set_bp_sym("__libc_valloc", &Emulator::valloc_bp, symbols);
-	set_bp_sym("pvalloc", &Emulator::pvalloc_bp, symbols);
-	set_bp_sym("__calloc", &Emulator::calloc_bp, symbols);
-	set_bp_sym("memcpy", &Emulator::memcpy_bp, symbols);
-	set_bp_sym("memset", &Emulator::memset_bp, symbols);
-}
-
-void Emulator::set_bp_addr(vaddr_t addr, breakpoint_t bp){
-	assert(addr < bps_bitmap.size());
-	bps[addr] = bp;
-	bps_bitmap[addr] = true;
-}
-
-void Emulator::set_bp_sym(const string& symbol_name, breakpoint_t bp,
-                          const vector<symbol_t>& symbols)
-{
-	auto it = symbols.begin();
-	while (it != symbols.end() && it->symbol_name != symbol_name) ++it;
-	if (it == symbols.end())
-		die("Not found symbol %s\n", symbol_name.c_str());
-	set_bp_addr(it->symbol_value, bp);
-	dbgprintf("set breakpoint %s at 0x%lX\n", symbol_name.c_str(), it->symbol_value);
+void Emulator::set_bps(){
+	breakpoints.set_bp_sym("__libc_malloc", &Emulator::malloc_bp, true);
+	breakpoints.set_bp_sym("__free", &Emulator::free_bp, true);
+	breakpoints.set_bp_sym("__libc_realloc", &Emulator::realloc_bp, true);
+	breakpoints.set_bp_sym("__libc_memalign", &Emulator::memalign_bp, true);
+	breakpoints.set_bp_sym("__libc_valloc", &Emulator::valloc_bp, true);
+	breakpoints.set_bp_sym("pvalloc", &Emulator::pvalloc_bp, true);
+	breakpoints.set_bp_sym("__calloc", &Emulator::calloc_bp, true);
+	breakpoints.set_bp_sym("memcpy", &Emulator::memcpy_bp, true);
+	breakpoints.set_bp_sym("memset", &Emulator::memset_bp, true);
 }
 
 void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
@@ -270,9 +253,10 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats, bool record_cov){
 	// Handle breakpoint. Record coverage if it changed pc, same as we do in
 	// branches
 	cycle_t cycles = rdtsc2();
-	if (bps_bitmap[pc]){
+	bp_handler_t bp = breakpoints.get_bp(pc);
+	if (bp){
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
-		(this->*bps[pc])();
+		(this->*bp)();
 		if (pc != pc_bf_bp)    // pc changed
 			if (record_cov) add_coverage(cov, pc_bf_bp, pc);
 	}
@@ -344,8 +328,8 @@ const char* regs_map[] = {
 	"gp", "sp", "fp", "ra",
 	"hi", "lo"
 };
-void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
-                       Stats& local_stats)
+void Emulator::run_jit(const string& input, cov_t& cov, 
+                       JIT::jit_cache_t& jit_cache, Stats& local_stats)
 {
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
@@ -353,7 +337,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 	this->input_sz = input.size();
 
 	// JIT block arguments
-	vm_state state = {
+	JIT::VmState state = {
 		regs,
 		mmu.get_memory(),
 		mmu.get_perms(),
@@ -363,7 +347,7 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 		fpregs,
 		&ccs,
 	};
-	exit_info exit_inf;
+	JIT::ExitInfo exit_inf;
 	uint8_t*  cov_map = cov.data();
 	uint32_t  regs_state[2000][35];
 	uint32_t  ret;
@@ -372,42 +356,35 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 	uint64_t instr_exec = 0;
 
 	running = true;
-	jit_block_t jit_block;
+	JIT::jit_block_t jit_block;
 	cycle_t cycles;
 	while (running){
 		// Get the JIT block and run it
 		cycles = rdtsc2(); // jit_cache_cycles
-		jit_block = jit_cache.cache[pc];
+		jit_block = jit_cache[pc];
 		if (!jit_block){
-			// Writing to the cache is thread-safe because it is a vector, but
-			// it seems like LLVM jitting is not. Thus, we lock here so there's
-			// only one thread jitting at a time.
-			// It could happen that two or more threads wait to JIT the same pc.
-			// The second will load it from disk cache, so it is not a problem.
-			jit_cache.mtx.lock();
-			jit_block = Jitter(pc, mmu, cov.size(), bps_bitmap).get_result();
-			jit_cache.mtx.unlock();
-			jit_cache.cache[pc] = jit_block;
+			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints).get_result();
+			jit_cache[pc] = jit_block;
 		}
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
-		cycles = rdtsc1(); // run_cycles
+		//cycles = rdtsc1(); // run_cycles
 		ret    = jit_block(&state, &exit_inf, cov_map, regs_state);
 		local_stats.instr += ret;
 		instr_exec        += ret;
-		local_stats.run_cycles += rdtsc1() - cycles;
+		//local_stats.run_cycles += rdtsc1() - cycles;
 
 		// Handle the vm exit
 		cycles = rdtsc2(); // vm_exit_cycles
 		switch (exit_inf.reason){
-			case exit_info::ExitReason::IndirectBranch:
-			case exit_info::ExitReason::Call:
+			case JIT::ExitInfo::ExitReason::IndirectBranch:
+			case JIT::ExitInfo::ExitReason::Call:
 				// Just continue compilation
 				break;
-			case exit_info::ExitReason::Syscall:
+			case JIT::ExitInfo::ExitReason::Syscall:
 				handle_syscall(regs[Reg::v0]);
 				break;
-			case exit_info::ExitReason::Fault:
+			case JIT::ExitInfo::ExitReason::Fault:
 				// JIT just tells us there's a fault with no additional info.
 				// Run interpreter from last reenter pc and let it throw a more
 				// accurate fault. I'm not sure if this is correct as state is
@@ -419,24 +396,26 @@ void Emulator::run_jit(const string& input, cov_t& cov, jit_cache_t& jit_cache,
 				// interpreter cov ids
 				//run_interpreter(input, cov, local_stats); // this will throw
 				die("JIT said fault but interpreter didn't\n");
-			case exit_info::ExitReason::Exception:
+			case JIT::ExitInfo::ExitReason::Exception:
 				die("Exception??\n");
-			case exit_info::ExitReason::Rdhwr:
+			case JIT::ExitInfo::ExitReason::Rdhwr:
 				handle_rdhwr(exit_inf.info1, exit_inf.info2);
 				break;
-			case exit_info::ExitReason::Breakpoint: {
-				// Breakpoint address is reenter_pc - 4
+			case JIT::ExitInfo::ExitReason::Breakpoint: {
+				// Update pc before running breakpoint handler
+				pc = exit_inf.reenter_pc;
 				vaddr_t pc_bf_bp = pc;
-				(this->*bps[exit_inf.reenter_pc-4])();
-				if (pc != pc_bf_bp){ 
-					// Breakpoint handler changed PC. Update reenter_pc and
-					// report coverage
-					exit_inf.reenter_pc = pc;
-					add_coverage(cov, exit_inf.reenter_pc-4, pc);
-				}
+				bp_handler_t bp  = breakpoints.get_bp(pc);
+				assert(bp);
+				(this->*bp)();
+				if (pc == pc_bf_bp)
+					die("JIT breakpoint didn't change pc\n");
+				// Update reenter_pc and report coverage
+				exit_inf.reenter_pc = pc;
+				add_coverage(cov, pc_bf_bp, pc);
 				break;
 			}
-			case exit_info::ExitReason::CheckRepCovId: {
+			case JIT::ExitInfo::ExitReason::CheckRepCovId: {
 				vaddr_t from = exit_inf.info1;
 				vaddr_t to   = exit_inf.reenter_pc;
 				uint32_t cov_id = exit_inf.info2;
@@ -532,9 +511,7 @@ void Emulator::calloc_bp(){
 
 	// Perform allocation and set memory to zero
 	vaddr_t addr = (alloc_sz > 0 ? mmu.alloc(alloc_sz) : 0);
-	void* zero = alloca(alloc_sz);
-	memset(zero, 0, alloc_sz);
-	mmu.write_mem(addr, zero, sizeof(zero));
+	mmu.set_mem(addr, 0, alloc_sz);
 
 	regs[Reg::v0] = addr;
 	prev_pc = pc;
@@ -543,7 +520,6 @@ void Emulator::calloc_bp(){
 }
 
 void Emulator::memcpy_bp(){
-	//printf("memcpy_bp\n");
 	vaddr_t dst = regs[Reg::a0];
 	vaddr_t src = regs[Reg::a1];
 	vsize_t len = regs[Reg::a2];
@@ -670,16 +646,19 @@ uint32_t Emulator::sys_readlink(vaddr_t path_addr, vaddr_t buf_addr,
 {
 	uint32_t written = 0;
 	string path = mmu.read_string(path_addr);
-	if (path == "/proc/self/exe"){
-		if (bufsize < elfpath.size())
-			die("error readlink\n");
-		mmu.write_mem(buf_addr, elfpath.c_str(), elfpath.size());
-		written = elfpath.size();
-	} else
+	string result;
+	if (path == "/proc/self/exe")
+		result = elf.get_abs_path();
+	else
 		die("Unimplemented readlink\n");
 	
+	if (bufsize < result.size())
+		die("error readlink\n");
+	mmu.write_mem(buf_addr, result.c_str(), result.size());
+	written = result.size();
+
 	dbgprintf("readlink(\"%s\", 0x%X, %d) --> %d (%s)\n", path.c_str(), buf_addr, 
-	          bufsize, written, elfpath.c_str());
+	          bufsize, written, result.c_str());
 	error = 0;
 	return written;
 }
@@ -879,8 +858,8 @@ void Emulator::handle_syscall(uint32_t syscall){
 	switch (syscall){
 		case 4001: // exit
 		case 4246: // exit_group
-			running = false;
 			dbgprintf("EXIT %d\n", regs[Reg::a0]);
+			running = false;
 			break;
 
 		case 4003: // read
@@ -1000,7 +979,6 @@ void Emulator::handle_syscall(uint32_t syscall){
 				regs[Reg::a2],
 				regs[Reg::a3]
 			);
-			//die("openat\n");
 			break;
 
 		default:

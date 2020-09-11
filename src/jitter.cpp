@@ -12,17 +12,6 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "jitter.h"
-#include "inst_decoding.h"
-
-// When enabled, a function call will finish the compilation so that
-// the called function is in another compilation unit.
-// When disabled, the function will be inlined in the current compilation unit.
-// Disabling this usually gived a bit more runtime speed, with the cost of a
-// greatly increased compilation time.
-#define END_COMPILING_ON_CALLS 1
-
-// Enable code coverage
-#define COVERAGE 1
 
 // Attempt to give a unique coverage id to each branch.
 // When disabled, branch hashes are used as coverage ids, same as the
@@ -35,26 +24,8 @@
 //       (somehow unique ids to indirect branches)
 #define UNIQUE_COV_ID_ATTEMPT 1
 
-// For debugging purposes: check repeated coverage ids. This generates a vm exit
-// after each code coverage event
-#define DBG_CHECK_REPEATED_COV_ID 0
-
-
 using namespace std;
-
-llvm::Type* void_ty;
-llvm::Type* int1_ty;
-llvm::Type* int8_ty;
-llvm::Type* int16_ty;
-llvm::Type* int32_ty;
-llvm::Type* int64_ty;
-llvm::Type* float_ty;
-llvm::Type* int1ptr_ty;
-llvm::Type* int8ptr_ty;
-llvm::Type* int32ptr_ty;
-llvm::Type* int16ptr_ty;
-llvm::Type* int64ptr_ty;
-llvm::Type* floatptr_ty;
+using namespace JIT;
 
 uint32_t load_next_cov_id(){
 	uint32_t result;
@@ -68,6 +39,7 @@ uint32_t load_next_cov_id(){
 }
 uint32_t Jitter::next_cov_id = load_next_cov_id();
 unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> Jitter::cov_ids;
+std::mutex Jitter::mutex;
 
 struct jit_init {
 	jit_init(){
@@ -78,12 +50,15 @@ struct jit_init {
 };
 
 Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
-               const vector<bool>& bps_bitmap):
-	mmu(mmu), cov_map_size(cov_map_size), bps_bitmap(bps_bitmap),
+               const Breakpoints& breakpoints):
+	mmu(mmu), cov_map_size(cov_map_size), breakpoints(breakpoints),
 	p_context(new llvm::LLVMContext),
 	p_module(new llvm::Module("module", *p_context)),
 	context(*p_context), module(*p_module), builder(context)
 {
+	// Lock global jitter mutex
+	std::lock_guard<std::mutex> lock(mutex);
+
 	static jit_init init; // thread_local?
 
 	if (__builtin_popcount(cov_map_size) != 1)
@@ -102,7 +77,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	// We couldn't load it from disk. Time to JIT
 	printf("starting jit 0x%X\n", pc);
 
-	// Get types
+	// Get basic types
 	void_ty      = llvm::Type::getVoidTy(context);
 	int1_ty      = llvm::Type::getInt1Ty(context);
 	int8_ty      = llvm::Type::getInt8Ty(context);
@@ -187,7 +162,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	// every memory access
 	fault_path = llvm::BasicBlock::Create(context, "fault_path", function);
 	builder.SetInsertPoint(fault_path);
-	vm_exit(exit_info::ExitReason::Fault, builder.getInt32(0));
+	vm_exit(ExitInfo::ExitReason::Fault, builder.getInt32(0));
 	builder.SetInsertPoint(entry_block);
 
 	// Create basic blocks recursively
@@ -263,11 +238,17 @@ void Jitter::compile(){
 	string features = subtarget_features.getString();
 
 	llvm::TargetMachine* machine = target->createTargetMachine(
-		triple,
-		llvm::sys::getHostCPUName(),
-		features,
-		llvm::TargetOptions(),
-		llvm::Optional<llvm::Reloc::Model>()
+		triple,                               // triple str
+		llvm::sys::getHostCPUName(),          // cpu name str
+		features,                             // features str
+		llvm::TargetOptions(),                // target options
+		llvm::Optional<llvm::Reloc::Model>(), // relocation model
+		llvm::None,                           // no idea
+		llvm::CodeGenOpt::Default,            // codegen optimization
+		true                                  // JIT
+		// It took me two whole days to figure out why relocation types when
+		// emiting object files to the disk cache were wrong. JIT is false
+		// for default. Beware, kids.
 	);
 
 	// Optimize IR
@@ -302,9 +283,10 @@ void Jitter::compile(){
 		die("error opening cache for writing: %s\n", ec.message().c_str());
 
 	llvm::legacy::PassManager pass_dumper;
-	machine->addPassesToEmitFile(pass_dumper, os, nullptr, 
+	machine->addPassesToEmitFile(pass_dumper, os, nullptr,
 	                             llvm::TargetMachine::CGFT_ObjectFile);
 	pass_dumper.run(module);
+	os.flush();
 	if (ec)
 		die("error dumping objfile to disk: %s\n", ec.message().c_str());
 }
@@ -375,8 +357,8 @@ llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
 	return p_value;
 }
 
-void Jitter::vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
-                         llvm::Value* info1, llvm::Value* info2)
+void Jitter::vm_exit(ExitInfo::ExitReason reason, llvm::Value* reenter_pc,
+                     llvm::Value* info1, llvm::Value* info2)
 {
 	// Get pointer to exit info fields, write to them and return
 	llvm::Value* p_exit_info = &function->arg_begin()[1];
@@ -388,18 +370,21 @@ void Jitter::vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		},
 		"p_exit_reason"
 	);
-	llvm::Value* p_pc = builder.CreateInBoundsGEP(
-		p_exit_info,
-		{
-			builder.getInt32(0),
-			builder.getInt32(1),
-		},
-		"p_pc"
-	);
 	builder.CreateStore(builder.getInt32(reason), p_exit_reason);
-	builder.CreateStore(reenter_pc, p_pc);
 
-	// Store only info1 and info2 if they are provided
+	// Store the rest of the parameters only if they are provided
+	if (reenter_pc){
+		llvm::Value* p_pc = builder.CreateInBoundsGEP(
+			p_exit_info,
+			{
+				builder.getInt32(0),
+				builder.getInt32(1),
+			},
+			"p_pc"
+		);
+		builder.CreateStore(reenter_pc, p_pc);
+	}
+
 	if (info1){
 		llvm::Value* p_info1 = builder.CreateInBoundsGEP(
 			p_exit_info,
@@ -423,6 +408,7 @@ void Jitter::vm_exit(exit_info::ExitReason reason, llvm::Value* reenter_pc,
 		);
 		builder.CreateStore(info2, p_info2);
 	}
+
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
 
@@ -581,12 +567,12 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len){
 	builder.SetInsertPoint(nofault_path);
 }
 
-void Jitter::set_dirty(llvm::Value* addr, vsize_t len){
+void Jitter::set_dirty_mem(llvm::Value* addr, vsize_t len){
 	assert(len > 0);
 	/* Pseudocode:
 	 *
 	 * block_begin = addr/DIRTY_BLOCK_SIZE
-	 * block_end   = (addr+len)/DIRTY_BLOCK_SIZE + 1
+	 * block_end   = (addr+len+DIRTY_BLOCK_SIZE-1)/DIRTY_BLOCK_SIZE
 	 * for (block = block_begin; block < block_end; block++){
 	 *     if (!dirty_map[block]){
 	 *         dirty_vec[dirty_size++] = block
@@ -596,6 +582,9 @@ void Jitter::set_dirty(llvm::Value* addr, vsize_t len){
 	 * 
 	 * Actually it doesn't check the condition first, so it always performs
 	 * at least one iteration, which is consistent with having len > 0.
+	 * 
+	 * Maybe having a for loop is innecessary, most times it will run only
+	 * one iteration and it will be optimized.
 	*/
 
 	// Basic blocks used
@@ -614,9 +603,12 @@ void Jitter::set_dirty(llvm::Value* addr, vsize_t len){
 	llvm::Value* addr_end    = builder.CreateAdd(addr, builder.getInt32(len));
 	llvm::Value* block_begin = builder.CreateUDiv(addr, dirty_block_sz,
 	                                              "block_begin");
-	llvm::Value* block_end   = builder.CreateAdd(
-		builder.CreateUDiv(addr_end, dirty_block_sz),
-		builder.getInt32(1),
+	llvm::Value* block_end   = builder.CreateUDiv(
+		builder.CreateAdd(
+			addr_end, 
+			builder.CreateSub(dirty_block_sz, builder.getInt32(1))
+		),
+		dirty_block_sz,
 		"block_end"
 	);
 	builder.CreateBr(for_body);
@@ -689,7 +681,7 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len){
 	check_alignment_mem(addr, len);
 
 	// Set dirty
-	set_dirty(addr, len);
+	set_dirty_mem(addr, len);
 
 	// Get pointer to memory position, cast it from i8* to iN*, cast value from
 	// ?? to iN, and write value to pointer
@@ -721,17 +713,21 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 
 	builder.SetInsertPoint(block);
 
+	// Generate code for every instruction in the block
 	bool end = false;
 	while (!end){
-		end = handle_inst(pc);
-
-		// Check if this instruction had a breakpoint. We have already executed
-		// the instruction, so reenter pc is the next one. I haven't thought of
-		// any way of doing this without executing the instruction
-		if (bps_bitmap[pc]){
-			vm_exit(exit_info::ExitReason::Breakpoint, builder.getInt32(pc+4));
+		// If there's a breakpoint in current instruction, generate vm exit.
+		// Breakpoint handler will be run. It MUST change pc. Otherwise, we'll
+		// enter an infinite loop of vm exits and breakpoint handlers.
+		// Breakpoints that don't change pc can be implemented calling handlers
+		// directly from JIT code, without generating vm exits
+		if (breakpoints.has_bp(pc)){
+			vm_exit(ExitInfo::ExitReason::Breakpoint, builder.getInt32(pc));
 			break;
 		}
+
+		end = handle_inst(pc);
+
 		pc += 4;
 	}
 
@@ -771,1431 +767,10 @@ bool Jitter::handle_inst(vaddr_t pc){
 	return false;
 }
 
-bool Jitter::inst_test(vaddr_t pc, uint32_t inst){
-	cout << "Test instruction" << endl;
-	return false;
-}
-
-bool Jitter::inst_unimplemented(vaddr_t pc, uint32_t inst){
-	die("Unimplemented instruction 0x%X at 0x%X\n", inst, pc-4);
-	return false;
-}
-
-bool Jitter::inst_R(vaddr_t pc, uint32_t inst){
-	// Get the functor and call the appropiate handler
-	return (this->*inst_handlers_R[inst & 0b00111111])(pc, inst);
-}
-
-bool Jitter::inst_RI(vaddr_t pc, uint32_t inst){
-	// Get the functor and call the appropiate handler
-	return (this->*inst_handlers_RI[(inst >> 16) & 0b00011111])(pc, inst);
-}
-
-bool Jitter::inst_special2(vaddr_t pc, uint32_t inst){
-	return (this->*inst_handlers_special2[inst & 0b00111111])(pc, inst);
-}
-
-bool Jitter::inst_special3(vaddr_t pc, uint32_t inst){
-	return (this->*inst_handlers_special3[inst & 0b00111111])(pc, inst);
-}
-
-bool Jitter::inst_COP1(vaddr_t pc, uint32_t inst){
-	return (this->*inst_handlers_COP1[(inst >> 21) & 0b00011111])(pc, inst);
-}
-
-bool Jitter::inst_or(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, builder.CreateOr(get_reg(inst.s), get_reg(inst.t)));
-	return false;
-}
-
-bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
-	// Create cmp, set return address and handle delay slot
-	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
-	llvm::Value* cmp = builder.CreateICmpSGE(
-		get_reg(inst.s),
-		builder.getInt32(0),
-		"cmp"
-	);
-	set_reg(Reg::ra, pc+4);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(exit_info::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	if (END_COMPILING_ON_CALLS){
-		// This jump is a call: finish compilation
-		llvm::Value* reenter_pc = builder.CreateSelect(
-			cmp,
-			builder.getInt32(jump_addr),
-			builder.getInt32(pc+4)
-		);
-		vm_exit(exit_info::ExitReason::Call, reenter_pc);
-	} else {
-		// Create both blocks, branch and finish compilation
-		llvm::BasicBlock* true_block  = create_block(jump_addr);
-		llvm::BasicBlock* false_block = create_block(pc+4);
-
-		builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
-	}
-	return true;
-}
-
-bool Jitter::inst_nop(vaddr_t pc, uint32_t val){
-	return false;
-}
-
-bool Jitter::inst_lui(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	set_reg(inst.t, inst.C << 16);
-	return false;
-}
-
-bool Jitter::inst_addiu(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* v = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	set_reg(inst.t, builder.CreateAdd(get_reg(inst.s), v));
-	return false;
-}
-
-bool Jitter::inst_lw(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	set_reg(inst.t, read_mem(addr, 4));
-	return false;
-}
-
-bool Jitter::inst_and(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, builder.CreateAnd(get_reg(inst.s), get_reg(inst.t)));
-	return false;
-}
-
-bool Jitter::inst_sw(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 4);
-	return false;
-}
-
-bool Jitter::inst_jalr(vaddr_t pc, uint32_t val){
-	// Calculate jump addr and set return address
-	inst_R_t inst(val);
-	llvm::Value* jump_addr = get_reg(inst.s);
-	set_reg(inst.d, pc+4);
-
-	// Handle delay slot
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(builder.getInt32(pc), jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(exit_info::ExitReason::CheckRepCovId, jump_addr,
-			        builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// Generate indirect branch and finish compilation
-	vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
-	return true;
-}
-
-bool Jitter::inst_beq(vaddr_t pc, uint32_t val){
-	// Create cmp, handle delay slot
-	inst_I_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
-	llvm::Value* cmp = builder.CreateICmpEQ(
-		get_reg(inst.s),
-		get_reg(inst.t),
-		"cmp"
-	);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(exit_info::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// Create both blocks, branch and finish compilation
-	llvm::BasicBlock* true_block  = create_block(jump_addr);
-	llvm::BasicBlock* false_block = create_block(pc+4);
-
-	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
-	return true;
-}
-
-bool Jitter::inst_addu(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, builder.CreateAdd(get_reg(inst.t), get_reg(inst.s)));
-	return false;
-}
-
-bool Jitter::inst_sll(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* shamt = builder.getInt32(inst.S);
-	set_reg(inst.d, builder.CreateShl(get_reg(inst.t), shamt));
-	return false;
-}
-
-bool Jitter::inst_bne(vaddr_t pc, uint32_t val){
-	// Create cmp, handle delay slot
-	inst_I_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
-	llvm::Value* cmp = builder.CreateICmpNE(
-		get_reg(inst.s),
-		get_reg(inst.t),
-		"cmp"
-	);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(exit_info::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// Create both blocks, branch and finish compilation
-	llvm::BasicBlock* true_block  = create_block(jump_addr);
-	llvm::BasicBlock* false_block = create_block(pc+4);
-
-	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
-	return true;
-}
-
-bool Jitter::inst_jr(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* jump_addr = get_reg(inst.s);
-
-	// Handle delay slot first
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(builder.getInt32(pc), jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(exit_info::ExitReason::CheckRepCovId, jump_addr,
-			        builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// Generate indirect branch and finish compilation
-	vm_exit(exit_info::ExitReason::IndirectBranch, jump_addr);
-	return true;
-}
-
-bool Jitter::inst_lhu(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 2);
-	set_reg(inst.t, value);
-	return false;
-}
-
-bool Jitter::inst_syscall(vaddr_t pc, uint32_t val){
-	llvm::Value* reenter_pc = builder.getInt32(pc);
-	vm_exit(exit_info::ExitReason::Syscall, reenter_pc);
-	return true;
-}
-
-bool Jitter::inst_xor(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, builder.CreateXor(get_reg(inst.s), get_reg(inst.t)));
-	return false;
-}
-
-bool Jitter::inst_sltu(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* cmp = builder.CreateICmpULT(get_reg(inst.s), get_reg(inst.t));
-	set_reg(inst.d, cmp);
-	return false;
-}
-
-bool Jitter::inst_sltiu(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* value = builder.getInt32((int16_t)inst.C);
-	llvm::Value* cmp = builder.CreateICmpULT(get_reg(inst.s), value);
-	set_reg(inst.t, cmp);
-	return false;
-}
-
-bool Jitter::inst_movn(vaddr_t pc, uint32_t val){
-	// Hope this shit gets optimized: `rd = (rt != 0 ? rs : rd)`
-	inst_R_t inst(val);
-	llvm::Value* cmp = builder.CreateICmpNE(
-		get_reg(inst.t),
-		builder.getInt32(0)
-	);
-	llvm::Value* sel = builder.CreateSelect(
-		cmp,
-		get_reg(inst.s),
-		get_reg(inst.d)
-	);
-	set_reg(inst.d, sel);
-	return false;
-}
-
-bool Jitter::inst_movz(vaddr_t pc, uint32_t val){
-	// Hope this shit gets optimized: `rd = (rt == 0 ? rs : rd)`
-	inst_R_t inst(val);
-	llvm::Value* cmp = builder.CreateICmpEQ(
-		get_reg(inst.t),
-		builder.getInt32(0)
-	);
-	llvm::Value* sel = builder.CreateSelect(
-		cmp,
-		get_reg(inst.s),
-		get_reg(inst.d)
-	);
-	set_reg(inst.d, sel);
-	return false;
-}
-
-bool Jitter::inst_subu(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, builder.CreateSub(get_reg(inst.s), get_reg(inst.t)));
-	return false;
-}
-
-bool Jitter::inst_teq(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::BasicBlock* trap_path =
-		llvm::BasicBlock::Create(context, "trap_path", function);
-	llvm::BasicBlock* normal_path =
-		llvm::BasicBlock::Create(context, "normal_path", function);
-	llvm::Value* cmp = builder.CreateICmpEQ(get_reg(inst.s), get_reg(inst.t));
-	builder.Insert(llvm::BranchInst::Create(trap_path, normal_path, cmp));
-	
-	builder.SetInsertPoint(trap_path);
-	llvm::Value* reenter_pc = builder.getInt32(pc);
-	vm_exit(exit_info::ExitReason::Exception, reenter_pc);
-
-	builder.SetInsertPoint(normal_path);
-	return false;
-}
-
-bool Jitter::inst_div(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* dividend = get_reg(inst.s);
-	llvm::Value* divisor  = get_reg(inst.t);
-	set_reg(Reg::hi, builder.CreateSRem(dividend, divisor));
-	set_reg(Reg::lo, builder.CreateSDiv(dividend, divisor));
-	return false;
-}
-
-bool Jitter::inst_divu(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* dividend = get_reg(inst.s);
-	llvm::Value* divisor  = get_reg(inst.t);
-	set_reg(Reg::hi, builder.CreateURem(dividend, divisor));
-	set_reg(Reg::lo, builder.CreateUDiv(dividend, divisor));
-	return false;
-}
-
-bool Jitter::inst_mflo(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, get_reg(Reg::lo));
-	return false;
-}
-
-bool Jitter::inst_mul(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, builder.CreateMul(get_reg(inst.s), get_reg(inst.t)));
-	return false;
-}
-
-bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
-	// Create cmp, handle delay slot
-	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
-	llvm::Value* cmp = builder.CreateICmpSLT(
-		get_reg(inst.s),
-		llvm::ConstantInt::get(int32_ty, 0, true),
-		"cmp"
-	);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(exit_info::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// Create both blocks, branch and finish compilation
-	llvm::BasicBlock* true_block  = create_block(jump_addr);
-	llvm::BasicBlock* false_block = create_block(pc+4);
-
-	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
-	return true;
-}
-
-bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
-	// Create cmp, handle delay slot
-	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
-	llvm::Value* cmp = builder.CreateICmpSLE(
-		get_reg(inst.s),
-		llvm::ConstantInt::get(int32_ty, 0, true),
-		"cmp"
-	);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(exit_info::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-
-	}
-
-	// Create both blocks, branch and finish compilation
-	llvm::BasicBlock* true_block  = create_block(jump_addr);
-	llvm::BasicBlock* false_block = create_block(pc+4);
-
-	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
-	return true;
-}
-
-bool Jitter::inst_rdhwr(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* reenter_pc = builder.getInt32(pc);
-	vm_exit(
-		exit_info::ExitReason::Rdhwr,
-		reenter_pc, 
-		builder.getInt32(inst.d), 
-		builder.getInt32(inst.t)
-	);
-	return true;
-}
-
-bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
-	// Create cmp, handle delay slot
-	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
-	llvm::Value* cmp = builder.CreateICmpSGE(
-		get_reg(inst.s),
-		builder.getInt32(0),
-		"cmp"
-	);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(exit_info::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// Create both blocks, branch and finish compilation
-	llvm::BasicBlock* true_block  = create_block(jump_addr);
-	llvm::BasicBlock* false_block = create_block(pc+4);
-
-	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
-	return true;
-}
-
-bool Jitter::inst_slti(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* value = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* cmp   = builder.CreateICmpSLT(get_reg(inst.s), value);
-	set_reg(inst.t, cmp);
-	return false;
-}
-
-bool Jitter::inst_andi(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* value = builder.getInt32(inst.C);
-	set_reg(inst.t, builder.CreateAnd(get_reg(inst.s), value));
-	return false;
-}
-
-bool Jitter::inst_ori(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* value = builder.getInt32(inst.C);
-	set_reg(inst.t, builder.CreateOr(get_reg(inst.s), value));
-	return false;
-}
-
-bool Jitter::inst_xori(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* value = builder.getInt32(inst.C);
-	set_reg(inst.t, builder.CreateXor(get_reg(inst.s), value));
-	return false;
-}
-
-bool Jitter::inst_pref(vaddr_t pc, uint32_t val){
-	return false;
-}
-
-bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
-	// Calculate jump addr and set return address
-	inst_J_t inst(val);
-	vaddr_t jump_addr = (inst.A << 2) | (pc & 0xF0000000);
-	set_reg(Reg::ra, pc+4);
-
-	// Handle delay slot
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(exit_info::ExitReason::CheckRepCovId,
-					builder.getInt32(jump_addr), builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	if (END_COMPILING_ON_CALLS){
-		// This jump is a call: finish compilation
-		vm_exit(exit_info::ExitReason::Call, builder.getInt32(jump_addr));
-	} else {
-		// Create block, branch and finish compilation
-		llvm::BasicBlock* true_block  = create_block(jump_addr);
-
-		builder.Insert(llvm::BranchInst::Create(true_block));
-	}
-	return true;
-}
-
-bool Jitter::inst_lb(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 1); // type: i8
-	llvm::Value* value_sext = builder.CreateSExt(value, int32_ty); // type: i32
-	set_reg(inst.t, value_sext);
-	return false;
-}
-
-bool Jitter::inst_nor(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, builder.CreateNot(builder.CreateOr(get_reg(inst.s),
-	                                                   get_reg(inst.t))));
-	return false;
-}
-
-bool Jitter::inst_bshfl(vaddr_t pc, uint32_t val){
-	switch ((val >> 6) & 0b11111){
-		case 0b00010: // wsbh
-			return inst_wsbh(pc, val);
-			break;
-		case 0b10000: // seb
-			return inst_seb(pc, val);
-			break;
-		case 0b11000: // seh
-			return inst_seh(pc, val);
-			break;
-		default:
-			die("Unimplemented bshfl instruction at 0x%X: 0x%X\n", pc-4, val);
-	}
-	return false;
-}
-
-bool Jitter::inst_seh(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* reg = get_reg(inst.t);
-	set_reg(inst.d, 
-	        builder.CreateSExt(builder.CreateTrunc(reg, int16_ty), int32_ty));
-	return false;
-}
-
-bool Jitter::inst_seb(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* reg = get_reg(inst.t);
-	set_reg(inst.d, 
-	        builder.CreateSExt(builder.CreateTrunc(reg, int8_ty), int32_ty));
-	return false;
-}
-
-bool Jitter::inst_wsbh(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* v     = get_reg(inst.t);
-	llvm::Value* int8  = builder.getInt32(8);
-	llvm::Value* mask1 = builder.getInt32(0xFF000000);
-	llvm::Value* mask2 = builder.getInt32(0x00FF0000);
-	llvm::Value* mask3 = builder.getInt32(0x0000FF00);
-	llvm::Value* mask4 = builder.getInt32(0x000000FF);
-	llvm::Value* tmp1  = builder.CreateOr(
-			builder.CreateLShr(builder.CreateAnd(v, mask1), int8),
-			builder.CreateShl (builder.CreateAnd(v, mask2), int8)
-	);
-	llvm::Value* tmp2  = builder.CreateOr(
-			builder.CreateLShr(builder.CreateAnd(v, mask3), int8),
-			builder.CreateShl (builder.CreateAnd(v, mask4), int8)
-	);
-	llvm::Value* res   = builder.CreateOr(tmp1, tmp2);
-	set_reg(inst.d, res);
-	return false;
-}
-
-bool Jitter::inst_srl(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* shamt = builder.getInt32(inst.S);
-	set_reg(inst.d, builder.CreateLShr(get_reg(inst.t), shamt));
-	return false;
-}
-
-bool Jitter::inst_lh(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 2); // type: i16
-	llvm::Value* value_sext = builder.CreateSExt(value, int32_ty); // type: i32
-	set_reg(inst.t, value_sext);
-	return false;
-}
-
-bool Jitter::inst_lbu(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 1);
-	set_reg(inst.t, value);
-	return false;
-}
-
-bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
-	llvm::Value* addr_align = builder.CreateSub(addr, offset);
-
-	check_bounds_mem(addr_align, 4);
-	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
-	llvm::Value* p_mem = get_pmemory(addr_align);
-	llvm::Value* p_reg = get_preg(inst.t);
-	builder.CreateMemCpy(
-		builder.CreateInBoundsGEP(
-			builder.CreateBitCast(p_reg, int8ptr_ty),
-			builder.CreateSub(builder.getInt32(3), offset)),
-		4,     // dst align
-		p_mem, // src 
-		1,     // src align
-		builder.CreateAdd(offset, builder.getInt32(1))
-	);
-	return false;
-}
-
-bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
-	llvm::Value* addr_align = builder.CreateSub(addr, offset);
-
-	// Create fault path
-	check_bounds_mem(addr_align, 4);
-	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
-	llvm::Value* p_mem = get_pmemory(addr_align);
-	llvm::Value* p_reg = get_preg(inst.t);
-	builder.CreateMemCpy(
-		p_reg, // dst
-		4,     // dst align
-		builder.CreateInBoundsGEP(builder.CreateBitCast(p_mem, int8ptr_ty), 
-		                          offset), 
-		1,     // src align
-		builder.CreateSub(builder.getInt32(4), offset)
-	);
-	return false;
-}
-
-bool Jitter::inst_sb(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 1);
-	return false;
-}
-
-bool Jitter::inst_sh(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 2);
-	return false;
-}
-
-bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
-	llvm::Value* addr_align = builder.CreateSub(addr, offset);
-
-	// Create fault path
-	check_bounds_mem(addr_align, 4);
-	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
-	llvm::Value* p_mem = get_pmemory(addr_align);
-	llvm::Value* p_reg = get_preg(inst.t);
-	builder.CreateMemCpy(
-		p_mem, // dst
-		4,     // dst align
-		builder.CreateInBoundsGEP(
-			builder.CreateBitCast(p_reg, int8ptr_ty),
-			builder.CreateSub(builder.getInt32(3), offset)), 
-		1,     // src align
-		builder.CreateAdd(offset, builder.getInt32(1))
-	);
-	return false;
-}
-
-bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
-	// Locurote. Traduced from Emulator::inst_swr
-	inst_I_t inst(val);
-	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
-	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
-	llvm::Value* addr_align = builder.CreateSub(addr, offset);
-
-	// Instead of reading the reg, reading the value from memory, moving part of 
-	// the reg to the value and writing back to memory, just change the value in
-	// memory. Some repeated code but I think it's worth it
-
-	// Create fault path
-	check_bounds_mem(addr_align, 4);
-	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
-	llvm::Value* p_mem = get_pmemory(addr_align);
-	llvm::Value* p_reg = get_preg(inst.t);
- 	builder.CreateMemCpy(
-		builder.CreateInBoundsGEP(builder.CreateBitCast(p_mem, int8ptr_ty),
-		                          offset), // dst
-		1,     // dst align
-		p_reg, // src
-		4,     // src align
-		builder.CreateSub(builder.getInt32(4), offset)
-	);
-	return false;
-}
-
-bool Jitter::inst_sllv(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* mask  = builder.getInt32(0b00011111);
-	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
-	set_reg(inst.d, builder.CreateShl(get_reg(inst.t), shamt));
-	return false;
-}
-
-bool Jitter::inst_srlv(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* mask  = builder.getInt32(0b00011111);
-	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
-	set_reg(inst.d, builder.CreateLShr(get_reg(inst.t), shamt));
-	return false;
-}
-
-bool Jitter::inst_slt(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* cmp = builder.CreateICmpSLT(
-		get_reg(inst.s),
-		get_reg(inst.t)
-	);
-	set_reg(inst.d, cmp);
-	return false;
-}
-
-bool Jitter::inst_sub(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_add(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_j(vaddr_t pc, uint32_t val){
-	// Calculate jump address and handle delay slot
-	inst_J_t inst(val);
-	vaddr_t jump_addr = (inst.A << 2) | (pc & 0xF0000000);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(exit_info::ExitReason::CheckRepCovId,
-					builder.getInt32(jump_addr), builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// This jump is a call: finish compilation.
-	if (END_COMPILING_ON_CALLS){
-		// It seems to be used as a tail call or as a call with no return
-		vm_exit(exit_info::ExitReason::Call, builder.getInt32(jump_addr));
-	} else {
-		// Create block, branch and finish compilation
-		llvm::BasicBlock* true_block = create_block(jump_addr);
-
-		builder.Insert(llvm::BranchInst::Create(true_block));
-	}
-	
-	return true;
-}
-
-bool Jitter::inst_ll(vaddr_t pc, uint32_t val){
-	// Forget about atomics for now
-	inst_lw(pc, val);
-	return false;
-}
-
-bool Jitter::inst_sc(vaddr_t pc, uint32_t val){
-	// Forget about atomics for now
-	inst_sw(pc, val);
-	inst_I_t inst(val);
-	set_reg(inst.t, 1);
-	return false;
-}
-
-bool Jitter::inst_sync(vaddr_t pc, uint32_t val){
-	// Forget about atomics for now
-	return false;
-}
-
-bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
-	// Create cmp, handle delay slot
-	inst_I_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
-	llvm::Value* cmp = builder.CreateICmpSGT(
-		get_reg(inst.s),
-		builder.getInt32(0),
-		"cmp"
-	);
-	handle_inst(pc);
-
-	// Record coverage
-	if (COVERAGE){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(exit_info::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
-
-	// Create both blocks, branch and finish compilation
-	llvm::BasicBlock* true_block  = create_block(jump_addr);
-	llvm::BasicBlock* false_block = create_block(pc+4);
-
-	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
-	return true;
-}
-
-bool Jitter::inst_mult(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* reg1 = builder.CreateSExt(get_reg(inst.s), int64_ty);
-	llvm::Value* reg2 = builder.CreateSExt(get_reg(inst.t), int64_ty);
-	llvm::Value* res  = builder.CreateMul(reg1, reg2);
-	
-	llvm::Value* i32 = llvm::ConstantInt::get(int64_ty, 32);
-	set_reg(Reg::lo, builder.CreateTrunc(res, int32_ty));
-	set_reg(Reg::hi, builder.CreateTrunc(builder.CreateLShr(res, i32), int32_ty));
-	return false;
-}
-
-bool Jitter::inst_multu(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* reg1 = builder.CreateZExt(get_reg(inst.s), int64_ty);
-	llvm::Value* reg2 = builder.CreateZExt(get_reg(inst.t), int64_ty);
-	llvm::Value* res  = builder.CreateMul(reg1, reg2);
-	
-	llvm::Value* i32 = llvm::ConstantInt::get(int64_ty, 32);
-	set_reg(Reg::lo, builder.CreateTrunc(res, int32_ty));
-	set_reg(Reg::hi, builder.CreateTrunc(builder.CreateLShr(res, i32), int32_ty));
-	return false;
-}
-
-bool Jitter::inst_mfhi(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(inst.d, get_reg(Reg::hi));
-	return false;
-}
-
-bool Jitter::inst_mthi(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(Reg::hi, get_reg(inst.d));
-	return false;
-}
-
-bool Jitter::inst_mtlo(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	set_reg(Reg::lo, get_reg(inst.d));
-	return false;
-}
-
-bool Jitter::inst_ext(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	uint32_t size = inst.d + 1;
-	llvm::Value* lsb  = builder.getInt32(inst.S);
-	llvm::Value* mask = builder.getInt32((1 << size) - 1);
-	set_reg(inst.t, 
-	        builder.CreateAnd(builder.CreateLShr(get_reg(inst.s), lsb), mask));
-	return false;
-}
-
-bool Jitter::inst_ins(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	uint32_t size = inst.d - inst.S + 1;
-	llvm::Value* lsb  = builder.getInt32(inst.S);
-	llvm::Value* mask = builder.getInt32((1 << size)-1);
-	
-	// Get bits to insert, place them at the correct position
-	llvm::Value* ins  = builder.CreateAnd(get_reg(inst.s), mask);
-	llvm::Value* ins2 = builder.CreateShl(ins, lsb);
-
-	// Insert bits into reg (and & or)
-	llvm::Value* reg    = get_reg(inst.t);
-	llvm::Value* result = builder.CreateAnd(builder.CreateOr(reg, ins2), ins2);
-	set_reg(inst.t, result);
-	
-	return false;
-}
-
-bool Jitter::inst_sra(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* shamt = builder.getInt32(inst.S);
-	set_reg(inst.d, builder.CreateAShr(get_reg(inst.t), shamt));
-	return false;
-}
-
-bool Jitter::inst_srav(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Value* mask  = builder.getInt32(0b00011111);
-	llvm::Value* shamt = builder.CreateAnd(get_reg(inst.s), mask);
-	set_reg(inst.d, builder.CreateAShr(get_reg(inst.t), shamt));
-	return false;
-}
-
-bool Jitter::inst_clz(vaddr_t pc, uint32_t val){
-	inst_R_t inst(val);
-	llvm::Function* ctlz_i32 = llvm::Intrinsic::getDeclaration(
-		p_module.get(),
-		llvm::Intrinsic::ctlz,
-	    {int32_ty}
-	);
-	llvm::ConstantInt* fals3 = llvm::ConstantInt::getFalse(context);
-	set_reg(inst.d, builder.CreateCall(ctlz_i32, {get_reg(inst.s), fals3}));
-	//llvm::outs() << module;
-	//die("ctlz\n");
-	return false;
-}
-
-bool Jitter::inst_lwc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_swc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	return false;
-}
-
-bool Jitter::inst_ldc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	return false;
-}
-
-bool Jitter::inst_sdc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	return false;
-}
-
-bool Jitter::inst_fmt_s(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_fmt_d(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_fmt_w(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_fmt_l(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_fmt_ps(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_mfc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_mfhc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_mtc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_mthc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_c_cond_s(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_c_cond_d(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_bc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
-}
-
-bool Jitter::inst_cfc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	return false;
-}
-
-bool Jitter::inst_ctc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	return false;
-}
-
-bool Jitter::inst_break(vaddr_t pc, uint32_t val){
-	llvm::Value* reenter_pc = builder.getInt32(pc);
-	vm_exit(exit_info::ExitReason::Exception, reenter_pc);
-	return true;
-}
-
-// Instruction handlers indexed by opcode
-const inst_handler_jit_t Jitter::inst_handlers[] = {
-	&Jitter::inst_R,             // 000 000
-	&Jitter::inst_RI,            // 000 001
-	&Jitter::inst_j,             // 000 010
-	&Jitter::inst_jal,           // 000 011
-	&Jitter::inst_beq,           // 000 100
-	&Jitter::inst_bne,           // 000 101
-	&Jitter::inst_blez,          // 000 110
-	&Jitter::inst_bgtz,          // 000 111
-	&Jitter::inst_unimplemented, // 001 000
-	&Jitter::inst_addiu,         // 001 001
-	&Jitter::inst_slti,          // 001 010
-	&Jitter::inst_sltiu,         // 001 011
-	&Jitter::inst_andi,          // 001 100
-	&Jitter::inst_ori,           // 001 101
-	&Jitter::inst_xori,          // 001 110
-	&Jitter::inst_lui,           // 001 111
-	&Jitter::inst_unimplemented, // 010 000
-	&Jitter::inst_COP1,          // 010 001
-	&Jitter::inst_unimplemented, // 010 010
-	&Jitter::inst_unimplemented, // 010 011
-	&Jitter::inst_unimplemented, // 010 100
-	&Jitter::inst_unimplemented, // 010 101
-	&Jitter::inst_unimplemented, // 010 110
-	&Jitter::inst_unimplemented, // 010 111
-	&Jitter::inst_unimplemented, // 011 000
-	&Jitter::inst_unimplemented, // 011 001
-	&Jitter::inst_unimplemented, // 011 010
-	&Jitter::inst_unimplemented, // 011 011
-	&Jitter::inst_special2,      // 011 100
-	&Jitter::inst_unimplemented, // 011 101
-	&Jitter::inst_unimplemented, // 011 110
-	&Jitter::inst_special3,      // 011 111
-	&Jitter::inst_lb,            // 100 000
-	&Jitter::inst_lh,            // 100 001
-	&Jitter::inst_lwl,           // 100 010
-	&Jitter::inst_lw,            // 100 011
-	&Jitter::inst_lbu,           // 100 100
-	&Jitter::inst_lhu,           // 100 101
-	&Jitter::inst_lwr,           // 100 110
-	&Jitter::inst_unimplemented, // 100 111
-	&Jitter::inst_sb,            // 101 000
-	&Jitter::inst_sh,            // 101 001
-	&Jitter::inst_swl,           // 101 010
-	&Jitter::inst_sw,            // 101 011
-	&Jitter::inst_unimplemented, // 101 100
-	&Jitter::inst_unimplemented, // 101 101
-	&Jitter::inst_swr,           // 101 110
-	&Jitter::inst_unimplemented, // 101 111
-	&Jitter::inst_ll,            // 110 000
-	&Jitter::inst_lwc1,          // 110 001
-	&Jitter::inst_unimplemented, // 110 010
-	&Jitter::inst_pref,          // 110 011
-	&Jitter::inst_unimplemented, // 110 100
-	&Jitter::inst_ldc1,          // 110 101
-	&Jitter::inst_unimplemented, // 110 110
-	&Jitter::inst_unimplemented, // 110 111
-	&Jitter::inst_sc,            // 111 000
-	&Jitter::inst_swc1,          // 111 001
-	&Jitter::inst_unimplemented, // 111 010
-	&Jitter::inst_unimplemented, // 111 011
-	&Jitter::inst_unimplemented, // 111 100
-	&Jitter::inst_sdc1,          // 111 101
-	&Jitter::inst_unimplemented, // 111 110
-	&Jitter::inst_unimplemented, // 111 111
-};
-
-// Type R instruction handlers indexed by functor
-const inst_handler_jit_t Jitter::inst_handlers_R[] = {
-	&Jitter::inst_sll,           // 000 000
-	&Jitter::inst_unimplemented, // 000 001
-	&Jitter::inst_srl,           // 000 010
-	&Jitter::inst_sra,           // 000 011
-	&Jitter::inst_sllv,          // 000 100
-	&Jitter::inst_unimplemented, // 000 101
-	&Jitter::inst_srlv,          // 000 110
-	&Jitter::inst_srav,          // 000 111
-	&Jitter::inst_jr,            // 001 000
-	&Jitter::inst_jalr,          // 001 001
-	&Jitter::inst_movz,          // 001 010
-	&Jitter::inst_movn,          // 001 011
-	&Jitter::inst_syscall,       // 001 100
-	&Jitter::inst_break,         // 001 101
-	&Jitter::inst_unimplemented, // 001 110
-	&Jitter::inst_sync,          // 001 111
-	&Jitter::inst_mfhi,          // 010 000
-	&Jitter::inst_mthi,          // 010 001
-	&Jitter::inst_mflo,          // 010 010
-	&Jitter::inst_mtlo,          // 010 011
-	&Jitter::inst_unimplemented, // 010 100
-	&Jitter::inst_unimplemented, // 010 101
-	&Jitter::inst_unimplemented, // 010 110
-	&Jitter::inst_unimplemented, // 010 111
-	&Jitter::inst_mult,          // 011 000
-	&Jitter::inst_multu,         // 011 001
-	&Jitter::inst_div,           // 011 010
-	&Jitter::inst_divu,          // 011 011
-	&Jitter::inst_unimplemented, // 011 100
-	&Jitter::inst_unimplemented, // 011 101
-	&Jitter::inst_unimplemented, // 011 110
-	&Jitter::inst_unimplemented, // 011 111
-	&Jitter::inst_add,           // 100 000
-	&Jitter::inst_addu,          // 100 001
-	&Jitter::inst_sub,           // 100 010
-	&Jitter::inst_subu,          // 100 011
-	&Jitter::inst_and,           // 100 100
-	&Jitter::inst_or,            // 100 101
-	&Jitter::inst_xor,           // 100 110
-	&Jitter::inst_nor,           // 100 111
-	&Jitter::inst_unimplemented, // 101 000
-	&Jitter::inst_unimplemented, // 101 001
-	&Jitter::inst_slt,           // 101 010
-	&Jitter::inst_sltu,          // 101 011
-	&Jitter::inst_unimplemented, // 101 100
-	&Jitter::inst_unimplemented, // 101 101
-	&Jitter::inst_unimplemented, // 101 110
-	&Jitter::inst_unimplemented, // 101 111
-	&Jitter::inst_unimplemented, // 110 000
-	&Jitter::inst_unimplemented, // 110 001
-	&Jitter::inst_unimplemented, // 110 010
-	&Jitter::inst_unimplemented, // 110 011
-	&Jitter::inst_teq,           // 110 100
-	&Jitter::inst_unimplemented, // 110 101
-	&Jitter::inst_unimplemented, // 110 110
-	&Jitter::inst_unimplemented, // 110 111
-	&Jitter::inst_unimplemented, // 111 000
-	&Jitter::inst_unimplemented, // 111 001
-	&Jitter::inst_unimplemented, // 111 010
-	&Jitter::inst_unimplemented, // 111 011
-	&Jitter::inst_unimplemented, // 111 100
-	&Jitter::inst_unimplemented, // 111 101
-	&Jitter::inst_unimplemented, // 111 110
-	&Jitter::inst_unimplemented, // 111 111
-};
-
-// Type RI instruction handlers indexed by functor
-const inst_handler_jit_t Jitter::inst_handlers_RI[] = {
-	&Jitter::inst_bltz,          // 00 000
-	&Jitter::inst_bgez,          // 00 001
-	&Jitter::inst_unimplemented, // 00 010
-	&Jitter::inst_unimplemented, // 00 011
-	&Jitter::inst_unimplemented, // 00 100
-	&Jitter::inst_unimplemented, // 00 101
-	&Jitter::inst_unimplemented, // 00 110
-	&Jitter::inst_unimplemented, // 00 111
-	&Jitter::inst_unimplemented, // 01 000
-	&Jitter::inst_unimplemented, // 01 001
-	&Jitter::inst_unimplemented, // 01 010
-	&Jitter::inst_unimplemented, // 01 011
-	&Jitter::inst_unimplemented, // 01 100
-	&Jitter::inst_unimplemented, // 01 101
-	&Jitter::inst_unimplemented, // 01 110
-	&Jitter::inst_unimplemented, // 01 111
-	&Jitter::inst_unimplemented, // 10 000
-	&Jitter::inst_bgezal,        // 10 001
-	&Jitter::inst_unimplemented, // 10 010
-	&Jitter::inst_unimplemented, // 10 011
-	&Jitter::inst_unimplemented, // 10 100
-	&Jitter::inst_unimplemented, // 10 101
-	&Jitter::inst_unimplemented, // 10 110
-	&Jitter::inst_unimplemented, // 10 111
-	&Jitter::inst_unimplemented, // 11 000
-	&Jitter::inst_unimplemented, // 11 001
-	&Jitter::inst_unimplemented, // 11 010
-	&Jitter::inst_unimplemented, // 11 011
-	&Jitter::inst_unimplemented, // 11 100
-	&Jitter::inst_unimplemented, // 11 101
-	&Jitter::inst_unimplemented, // 11 110
-	&Jitter::inst_unimplemented, // 11 111
-};
-
-// Type special2 instructions indexed by functor
-const inst_handler_jit_t Jitter::inst_handlers_special2[] = {
-	&Jitter::inst_unimplemented, // 000 000
-	&Jitter::inst_unimplemented, // 000 001
-	&Jitter::inst_mul,           // 000 010
-	&Jitter::inst_unimplemented, // 000 011
-	&Jitter::inst_unimplemented, // 000 100
-	&Jitter::inst_unimplemented, // 000 101
-	&Jitter::inst_unimplemented, // 000 110
-	&Jitter::inst_unimplemented, // 000 111
-	&Jitter::inst_unimplemented, // 001 000
-	&Jitter::inst_unimplemented, // 001 001
-	&Jitter::inst_unimplemented, // 001 010
-	&Jitter::inst_unimplemented, // 001 011
-	&Jitter::inst_unimplemented, // 001 100
-	&Jitter::inst_unimplemented, // 001 101
-	&Jitter::inst_unimplemented, // 001 110
-	&Jitter::inst_unimplemented, // 001 111
-	&Jitter::inst_unimplemented, // 010 000
-	&Jitter::inst_unimplemented, // 010 001
-	&Jitter::inst_unimplemented, // 010 010
-	&Jitter::inst_unimplemented, // 010 011
-	&Jitter::inst_unimplemented, // 010 100
-	&Jitter::inst_unimplemented, // 010 101
-	&Jitter::inst_unimplemented, // 010 110
-	&Jitter::inst_unimplemented, // 010 111
-	&Jitter::inst_unimplemented, // 011 000
-	&Jitter::inst_unimplemented, // 011 001
-	&Jitter::inst_unimplemented, // 011 010
-	&Jitter::inst_unimplemented, // 011 011
-	&Jitter::inst_unimplemented, // 011 100
-	&Jitter::inst_unimplemented, // 011 101
-	&Jitter::inst_unimplemented, // 011 110
-	&Jitter::inst_unimplemented, // 011 111
-	&Jitter::inst_clz,           // 100 000
-	&Jitter::inst_unimplemented, // 100 001
-	&Jitter::inst_unimplemented, // 100 010
-	&Jitter::inst_unimplemented, // 100 011
-	&Jitter::inst_unimplemented, // 100 100
-	&Jitter::inst_unimplemented, // 100 101
-	&Jitter::inst_unimplemented, // 100 110
-	&Jitter::inst_unimplemented, // 100 111
-	&Jitter::inst_unimplemented, // 101 000
-	&Jitter::inst_unimplemented, // 101 001
-	&Jitter::inst_unimplemented, // 101 010
-	&Jitter::inst_unimplemented, // 101 011
-	&Jitter::inst_unimplemented, // 101 100
-	&Jitter::inst_unimplemented, // 101 101
-	&Jitter::inst_unimplemented, // 101 110
-	&Jitter::inst_unimplemented, // 101 111
-	&Jitter::inst_unimplemented, // 110 000
-	&Jitter::inst_unimplemented, // 110 001
-	&Jitter::inst_unimplemented, // 110 010
-	&Jitter::inst_unimplemented, // 110 011
-	&Jitter::inst_unimplemented, // 110 100
-	&Jitter::inst_unimplemented, // 110 101
-	&Jitter::inst_unimplemented, // 110 110
-	&Jitter::inst_unimplemented, // 110 111
-	&Jitter::inst_unimplemented, // 111 000
-	&Jitter::inst_unimplemented, // 111 001
-	&Jitter::inst_unimplemented, // 111 010
-	&Jitter::inst_unimplemented, // 111 011
-	&Jitter::inst_unimplemented, // 111 100
-	&Jitter::inst_unimplemented, // 111 101
-	&Jitter::inst_unimplemented, // 111 110
-	&Jitter::inst_unimplemented, // 111 111
-};
-
-const inst_handler_jit_t Jitter::inst_handlers_special3[] = {
-	&Jitter::inst_ext,           // 000 000
-	&Jitter::inst_unimplemented, // 000 001
-	&Jitter::inst_unimplemented, // 000 010
-	&Jitter::inst_unimplemented, // 000 011
-	&Jitter::inst_ins,           // 000 100
-	&Jitter::inst_unimplemented, // 000 101
-	&Jitter::inst_unimplemented, // 000 110
-	&Jitter::inst_unimplemented, // 000 111
-	&Jitter::inst_unimplemented, // 001 000
-	&Jitter::inst_unimplemented, // 001 001
-	&Jitter::inst_unimplemented, // 001 010
-	&Jitter::inst_unimplemented, // 001 011
-	&Jitter::inst_unimplemented, // 001 100
-	&Jitter::inst_unimplemented, // 001 101
-	&Jitter::inst_unimplemented, // 001 110
-	&Jitter::inst_unimplemented, // 001 111
-	&Jitter::inst_unimplemented, // 010 000
-	&Jitter::inst_unimplemented, // 010 001
-	&Jitter::inst_unimplemented, // 010 010
-	&Jitter::inst_unimplemented, // 010 011
-	&Jitter::inst_unimplemented, // 010 100
-	&Jitter::inst_unimplemented, // 010 101
-	&Jitter::inst_unimplemented, // 010 110
-	&Jitter::inst_unimplemented, // 010 111
-	&Jitter::inst_unimplemented, // 011 000
-	&Jitter::inst_unimplemented, // 011 001
-	&Jitter::inst_unimplemented, // 011 010
-	&Jitter::inst_unimplemented, // 011 011
-	&Jitter::inst_unimplemented, // 011 100
-	&Jitter::inst_unimplemented, // 011 101
-	&Jitter::inst_unimplemented, // 011 110
-	&Jitter::inst_unimplemented, // 011 111
-	&Jitter::inst_bshfl,         // 100 000
-	&Jitter::inst_unimplemented, // 100 001
-	&Jitter::inst_unimplemented, // 100 010
-	&Jitter::inst_unimplemented, // 100 011
-	&Jitter::inst_unimplemented, // 100 100
-	&Jitter::inst_unimplemented, // 100 101
-	&Jitter::inst_unimplemented, // 100 110
-	&Jitter::inst_unimplemented, // 100 111
-	&Jitter::inst_unimplemented, // 101 000
-	&Jitter::inst_unimplemented, // 101 001
-	&Jitter::inst_unimplemented, // 101 010
-	&Jitter::inst_unimplemented, // 101 011
-	&Jitter::inst_unimplemented, // 101 100
-	&Jitter::inst_unimplemented, // 101 101
-	&Jitter::inst_unimplemented, // 101 110
-	&Jitter::inst_unimplemented, // 101 111
-	&Jitter::inst_unimplemented, // 110 000
-	&Jitter::inst_unimplemented, // 110 001
-	&Jitter::inst_unimplemented, // 110 010
-	&Jitter::inst_unimplemented, // 110 011
-	&Jitter::inst_unimplemented, // 110 100
-	&Jitter::inst_unimplemented, // 110 101
-	&Jitter::inst_unimplemented, // 110 110
-	&Jitter::inst_unimplemented, // 110 111
-	&Jitter::inst_unimplemented, // 111 000
-	&Jitter::inst_unimplemented, // 111 001
-	&Jitter::inst_unimplemented, // 111 010
-	&Jitter::inst_rdhwr,         // 111 011
-	&Jitter::inst_unimplemented, // 111 100
-	&Jitter::inst_unimplemented, // 111 101
-	&Jitter::inst_unimplemented, // 111 110
-	&Jitter::inst_unimplemented, // 111 111
-};
-
-// Type COP1 instructions indexed by rs/fmt field
-const inst_handler_jit_t Jitter::inst_handlers_COP1[] = {
-	&Jitter::inst_mfc1,          // 00 000
-	&Jitter::inst_unimplemented, // 00 001
-	&Jitter::inst_cfc1,          // 00 010
-	&Jitter::inst_mfhc1,         // 00 011
-	&Jitter::inst_mtc1,          // 00 100
-	&Jitter::inst_unimplemented, // 00 101
-	&Jitter::inst_ctc1,          // 00 110
-	&Jitter::inst_mthc1,         // 00 111
-	&Jitter::inst_bc1,           // 01 000
-	&Jitter::inst_unimplemented, // 01 001
-	&Jitter::inst_unimplemented, // 01 010
-	&Jitter::inst_unimplemented, // 01 011
-	&Jitter::inst_unimplemented, // 01 100
-	&Jitter::inst_unimplemented, // 01 101
-	&Jitter::inst_unimplemented, // 01 110
-	&Jitter::inst_unimplemented, // 01 111
-	&Jitter::inst_fmt_s,         // 10 000
-	&Jitter::inst_fmt_d,         // 10 001
-	&Jitter::inst_unimplemented, // 10 010
-	&Jitter::inst_unimplemented, // 10 011
-	&Jitter::inst_fmt_w,         // 10 100
-	&Jitter::inst_fmt_l,         // 10 101
-	&Jitter::inst_fmt_ps,        // 10 110
-	&Jitter::inst_unimplemented, // 10 111
-	&Jitter::inst_unimplemented, // 11 000
-	&Jitter::inst_unimplemented, // 11 001
-	&Jitter::inst_unimplemented, // 11 010
-	&Jitter::inst_unimplemented, // 11 011
-	&Jitter::inst_unimplemented, // 11 100
-	&Jitter::inst_unimplemented, // 11 101
-	&Jitter::inst_unimplemented, // 11 110
-	&Jitter::inst_unimplemented, // 11 111
-};
-
 const char* exit_reason_map[] = {
 	"syscall", "fault", "indirect branch", "rdhwr", "exception", "breakpoint",
 };
-ostream& operator<<(ostream& os, const exit_info& exit_inf){
+ostream& operator<<(ostream& os, const ExitInfo& exit_inf){
 	if (exit_inf.reason >= sizeof(exit_reason_map)/sizeof(const char*)){
 		os << "Unknown exit reason " << exit_inf.reason;
 		return os;
@@ -2203,7 +778,7 @@ ostream& operator<<(ostream& os, const exit_info& exit_inf){
 	
 	os << "Exit reason: " << exit_reason_map[exit_inf.reason]
 	   << "; reenter pc: 0x" << hex << exit_inf.reenter_pc << dec;
-	if (exit_inf.reason == exit_info::ExitReason::Fault)
+	if (exit_inf.reason == ExitInfo::ExitReason::Fault)
 		os << "; Fault: " << Fault((Fault::Type)exit_inf.info1, exit_inf.info2);
 	return os;
 }

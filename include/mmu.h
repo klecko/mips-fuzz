@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <vector>
 #include "elf_parser.hpp"
+#include "fault.h"
 
 /*
 It might be better registering separately dirty memory and dirty perms?
@@ -16,140 +17,140 @@ Solve chapuza of typedefs in elf_parser.hpp
 */
 
 class Mmu {
-	public:
-		static const uint8_t PERM_READ  = (1 << 0); // Can be read
-		static const uint8_t PERM_WRITE = (1 << 1); // Can be written
-		static const uint8_t PERM_EXEC  = (1 << 2); // Can be executed
-		static const uint8_t PERM_INIT  = (1 << 3); // Has been initialized
-		static const vsize_t MAX_BRK_SZ = 0x100000;
-		static const vsize_t DIRTY_BLOCK_SIZE = 128;
+public:
+	static const uint8_t PERM_READ  = (1 << 0); // Can be read
+	static const uint8_t PERM_WRITE = (1 << 1); // Can be written
+	static const uint8_t PERM_EXEC  = (1 << 2); // Can be executed
+	static const uint8_t PERM_INIT  = (1 << 3); // Has been initialized
+	static const vsize_t MAX_BRK_SZ = 0x100000;
+	static const vsize_t DIRTY_BLOCK_SIZE = 128;
 
-	private:
-		// Guest virtual memory
-		uint8_t* memory;
-		vsize_t  memory_len;
+public:
+	Mmu(vsize_t mem_size = 0);
 
-		// Byte-level permissions for guest virtual memory
-		uint8_t* perms;
+	Mmu(const Mmu& other);
 
-		// Next allocation returned by `alloc`
-		vaddr_t  next_alloc;
+	Mmu(Mmu&& other) noexcept;
 
-		// Virtual address of the top of the stack region, if allocated
-		// Don't confuse with emulator stack pointer
-		vaddr_t  stack;
+	~Mmu();
 
-		// Brk is handled as an area after last loaded segment, and before
-		// custom allocations with alloc. Its max value is where custom
-		// allocations start, and its min value is its initial value
-		vaddr_t  brk;
-		vaddr_t  min_brk, max_brk;
+	friend void swap(Mmu& first, Mmu& second);
 
-		// Holds the index of every dirty block (addr/DIRTY_BLOCK_SIZE)
-		vaddr_t* dirty_vec;
-		vsize_t  dirty_size;
+	Mmu& operator=(Mmu other);
 
-		// Map for every block, true if dirty
-		std::vector<uint8_t> dirty_map;
+	uint8_t* get_memory();
 
-		// Checks if range is inside guest memory map, throwing OutOfBounds*
-		// fault if not
-		void check_bounds(vaddr_t addr, vsize_t len, uint8_t perm) const;
+	uint8_t* get_perms();
 
-		// Checks if `addr` is aligned to `align` bytes, throwing Misaligned*
-		// fault if not
-		void check_alignment(vaddr_t addr, vsize_t align, uint8_t perm) const;
+	vaddr_t* get_dirty_vec();
 
-		// Sets region from `addr` to `addr+len` as dirty
-		void set_dirty(vaddr_t addr, vsize_t len);
+	vsize_t* get_pdirty_size();
 
-		// Set permissions `perm` from `addr` to `addr+len`
-		// Updates dirty
-		void set_perms(vaddr_t addr, vsize_t len, uint8_t perm);
+	uint8_t* get_dirty_map();
 
-		// Checks that all bytes from `addr` to `addr+len` have `perm`
-		// permission. `perm` should be PERM_READ, PERM_WRITE or PERM_EXEC.
-		// Throw an exception if permissions are not fulfilled.
-		void check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const;
+	vsize_t size() const;
 
-	public:
-		Mmu(vsize_t mem_size = 0);
+	// Get current brk. Attempt to set new brk, performing size checks
+	vaddr_t get_brk() const;
+	bool set_brk(vaddr_t new_brk);
 
-		Mmu(const Mmu& other);
+	// Allocates a block of `size` bytes. Default perms are RW
+	vaddr_t alloc(vsize_t size);
 
-		Mmu(Mmu&& other) noexcept;
+	// Allocates a stack at the end of the guest memory space
+	// Returns the bottom of the stack (last valid address plus one)
+	vaddr_t alloc_stack(vsize_t size);
 
-		~Mmu();
+	// Read `len` bytes from virtual addr `src` into `dst`.
+	// Checks bounds and perms
+	void read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit=true) const;
 
-		friend void swap(Mmu& first, Mmu& second);
+	// Write `len` bytes from `src` into virtual addr `dst`.
+	// Checks bounds and perms
+	void write_mem(vaddr_t dst, const void* src, vsize_t len);
 
-		Mmu& operator=(Mmu other);
+	// Copy `len` bytes from virtual addrs `src` to `dst`, checking bounds
+	// and perms
+	void copy_mem(vaddr_t dst, vaddr_t src, vsize_t len);
 
-		uint8_t* get_memory();
+	// Set `len` bytes at the virtual addr `dst` to `c`, checking bounds and
+	// perms
+	void set_mem(vaddr_t dst, uint8_t c, vsize_t len);
 
-		uint8_t* get_perms();
+	// Read and return and instruction from virtual addr `dst`.
+	// Checks bounds, perms and alignment
+	uint32_t read_inst(vaddr_t addr) const;
 
-		vaddr_t* get_dirty_vec();
+	// Reads a value from memory. Checks bounds, perms and alignment
+	template <class T>
+	T read(vaddr_t addr, bool chk_uninit=true) const;
 
-		vsize_t* get_pdirty_size();
+	// Writes a value to memory. Checks bounds, perms and alignment
+	template <class T>
+	void write(vaddr_t addr, T value);
 
-		uint8_t* get_dirty_map();
+	// Read a string from memory. Checks bounds, perms and alignment
+	std::string read_string(vaddr_t addr) const;
 
-		vsize_t size() const;
+	// Forks the mmu and returns the child
+	Mmu fork() const;
 
-		// Get current brk. Attempt to set new brk, performing size checks
-		vaddr_t get_brk() const;
-		bool set_brk(vaddr_t new_brk);
+	// Resets the mmu to the parent it was previously forked from
+	void reset(const Mmu& other);
 
-		// Allocates a block of `size` bytes. Default perms are RW
-		vaddr_t alloc(vsize_t size);
+	// Load elf segments into memory and update `next_alloc` beyond them
+	void load_elf(const std::vector<segment_t>& segments);
 
-		// Allocates a stack at the end of the guest memory space
-		// Returns the bottom of the stack (last valid address plus one)
-		vaddr_t alloc_stack(vsize_t size);
+	// Hexdumps the memory
+	friend std::ostream& operator<<(std::ostream& os, const Mmu& mmu);
 
-		// Read `len` bytes from virtual addr `src` into `dst`.
-		// Checks bounds and perms
-		void read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit=true) const;
+private:
+	// Guest virtual memory
+	uint8_t* memory;
+	vsize_t  memory_len;
 
-		// Write `len` bytes from `src` into virtual addr `dst`.
-		// Checks bounds and perms
-		void write_mem(vaddr_t dst, const void* src, vsize_t len);
+	// Byte-level permissions for guest virtual memory
+	uint8_t* perms;
 
-		// Copy `len` bytes from virtual addrs `src` to `dst`, checking bounds
-		// and perms
-		void copy_mem(vaddr_t dst, vaddr_t src, vsize_t len);
+	// Next allocation returned by `alloc`
+	vaddr_t  next_alloc;
 
-		// Set `len` bytes at the virtual addr `dst` to `c`, checking bounds and
-		// perms
-		void set_mem(vaddr_t dst, uint8_t c, vsize_t len);
+	// Virtual address of the top of the stack region, if allocated
+	// Don't confuse with emulator stack pointer
+	vaddr_t  stack;
 
-		// Read and return and instruction from virtual addr `dst`.
-		// Checks bounds, perms and alignment
-		uint32_t read_inst(vaddr_t addr) const;
+	// Brk is handled as an area after last loaded segment, and before
+	// custom allocations with alloc. Its max value is where custom
+	// allocations start, and its min value is its initial value
+	vaddr_t  brk;
+	vaddr_t  min_brk, max_brk;
 
-		// Reads a value from memory. Checks bounds, perms and alignment
-		template <class T>
-		T read(vaddr_t addr, bool chk_uninit=true) const;
+	// Holds the index of every dirty block (addr/DIRTY_BLOCK_SIZE)
+	vaddr_t* dirty_vec;
+	vsize_t  dirty_size;
 
-		// Writes a value to memory. Checks bounds, perms and alignment
-		template <class T>
-		void write(vaddr_t addr, T value);
+	// Map for every block, true if dirty
+	std::vector<uint8_t> dirty_map;
 
-		// Read a string from memory. Checks bounds, perms and alignment
-		std::string read_string(vaddr_t addr) const;
+	// Checks if range is inside guest memory map, throwing OutOfBounds*
+	// fault if not
+	void check_bounds(vaddr_t addr, vsize_t len, uint8_t perm) const;
 
-		// Forks the mmu and returns the child
-		Mmu fork() const;
+	// Checks if `addr` is aligned to `align` bytes, throwing Misaligned*
+	// fault if not
+	void check_alignment(vaddr_t addr, vsize_t align, uint8_t perm) const;
 
-		// Resets the mmu to the parent it was previously forked from
-		void reset(const Mmu& other);
+	// Sets region from `addr` to `addr+len` as dirty
+	void set_dirty(vaddr_t addr, vsize_t len);
 
-		// Load elf segments into memory and update `next_alloc` beyond them
-		void load_elf(const std::vector<segment_t>& segments);
+	// Set permissions `perm` from `addr` to `addr+len`
+	// Updates dirty
+	void set_perms(vaddr_t addr, vsize_t len, uint8_t perm);
 
-		// Hexdumps the memory
-		friend std::ostream& operator<<(std::ostream& os, const Mmu& mmu);
+	// Checks that all bytes from `addr` to `addr+len` have `perm`
+	// permission. `perm` should be PERM_READ, PERM_WRITE or PERM_EXEC.
+	// Throw an exception if permissions are not fulfilled.
+	void check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const;
 };
 
 template<class T>
