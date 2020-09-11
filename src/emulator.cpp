@@ -458,7 +458,7 @@ uint64_t Emulator::run_until(vaddr_t pc){
 		dummy3.instr++;
 	}
 	if (!running)
-		die("Program finished runing while trying to run until 0x%X\n", pc);
+		die("Program finished running while trying to run until 0x%X\n", pc);
 	running = false;
 	return dummy3.instr;
 }
@@ -472,16 +472,18 @@ void Emulator::malloc_bp(){
 	vsize_t size  = regs[Reg::a0];
 	vaddr_t addr  = (size > 0 ? mmu.alloc(size) : 0);
 	regs[Reg::v0] = addr;
-	prev_pc = pc;
-	pc      = regs[Reg::ra];
+	prev_pc       = pc;
+	pc            = regs[Reg::ra];
 	dbgprintf("malloc(%u) --> 0x%X\n", size, addr);
 }
 
 void Emulator::free_bp(){
 	//die("free_bp\n");
 	vsize_t addr = regs[Reg::a0];
-	prev_pc = pc;
-	pc      = regs[Reg::ra];
+	if (addr != 0)
+		mmu.free(addr);
+	prev_pc      = pc;
+	pc           = regs[Reg::ra];
 	dbgprintf("free(0x%X)\n", addr);
 }
 

@@ -294,6 +294,8 @@ string Mmu::read_string(vaddr_t addr) const {
 }
 
 vaddr_t Mmu::alloc(vsize_t size){
+	assert(size > 0);
+
 	// Check out of memory
 	if (next_alloc + size > stack)
 		die("Out of memory allocating 0x%X bytes\n", size);
@@ -307,13 +309,40 @@ vaddr_t Mmu::alloc(vsize_t size){
 
 	// Memory is by default readable and writable, but not initialized
 	set_perms(current_alloc, size, PERM_READ|PERM_WRITE);
+
+	// Functions like strcmp expect to read OOB...
 	set_perms(current_alloc + size, aligned_size - size, PERM_READ);
 
 	// Update next allocation
 	next_alloc += aligned_size;
 
+	// Set this addr as allocated
+	cur_allocs[current_alloc] = {AllocState::Allocated, size};
+
 	dbgprintf("alloc(0x%X) --> 0x%X\n", size, current_alloc);
 	return current_alloc;
+}
+
+void Mmu::free(vaddr_t addr){
+	Allocation& allocation = cur_allocs[addr];
+	switch (allocation.state){
+		case AllocState::Allocated:
+			break;
+		case AllocState::Freed:
+			throw Fault(Fault::Type::DoubleFree, addr);
+		case AllocState::Unused:
+			throw Fault(Fault::Type::NotAllocatedFree, addr);
+		default:
+			die("Unknown alloc state for 0x%X: %d\n", addr, allocation.state);
+	}
+
+	// Update allocation
+	allocation.state     = AllocState::Freed;
+	allocation.size      = 0;
+
+	// Update perms
+	vsize_t aligned_size = (allocation.size + 0xF) & ~0xF;
+	set_perms(addr, aligned_size, NO_PERM);
 }
 
 vaddr_t Mmu::alloc_stack(vsize_t size){

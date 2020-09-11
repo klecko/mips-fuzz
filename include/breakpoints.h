@@ -49,7 +49,7 @@ public:
 			die("Not found symbol %s\n", sym_name.c_str());
 
 		set_bp_addr(sym_name + "_bp", it->value, handl, changes_pc);
-		dbgprintf("set breakpoint %s at 0x%lX\n", sym_name.c_str(),it->value);
+		dbgprintf("set breakpoint %s at 0x%X\n", sym_name.c_str(), it->value);
 	}
 
 	// Check if there's a breakpoint at a given address

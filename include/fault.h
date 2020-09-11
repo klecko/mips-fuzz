@@ -18,6 +18,8 @@ struct Fault: public std::exception {
 		MisalignedRead,
 		MisalignedWrite,
 		MisalignedExec,
+		DoubleFree,
+		NotAllocatedFree,
 		Unknown = 0xFFFFFFFF
 	};
 
@@ -54,6 +56,10 @@ inline std::string Fault::type_str() const {
 			return "MisalignedWrite";
 		case Fault::Type::MisalignedExec:
 			return "MisalignedExec";
+		case Fault::Type::DoubleFree:
+			return "DoubleFree";
+		case Fault::Type::NotAllocatedFree:
+			return "NotAllocatedFree";
 		case Fault::Type::Unknown:
 			return "Unknown";
 		default:

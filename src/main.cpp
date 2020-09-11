@@ -163,7 +163,7 @@ int main(){
 		uint64_t insts = emu.run_until(0x004c081c);//0x00423ec8);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
-		cout << "Unexpected fault runing before forking" << endl;
+		cout << "Unexpected fault running before forking" << endl;
 		cout << "[PC: 0x" << hex << emu.get_prev_pc() << "] " << f << endl;
 		cout << emu << endl;
 		return -1;

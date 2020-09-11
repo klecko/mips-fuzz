@@ -1,9 +1,10 @@
 #ifndef _MMU_H
 #define _MMU_H
 
-#include <stdint.h>
 #include <cstdlib>
 #include <vector>
+#include <unordered_map>
+#include "common.h"
 #include "elf_parser.hpp"
 #include "fault.h"
 
@@ -12,12 +13,11 @@ It might be better registering separately dirty memory and dirty perms?
 not spending much time reseting anyway
 
 Maybe reduce unnecesary sanity checks
-
-Solve chapuza of typedefs in elf_parser.hpp
 */
 
 class Mmu {
 public:
+	static const uint8_t NO_PERM    = 0;        // No permissions
 	static const uint8_t PERM_READ  = (1 << 0); // Can be read
 	static const uint8_t PERM_WRITE = (1 << 1); // Can be written
 	static const uint8_t PERM_EXEC  = (1 << 2); // Can be executed
@@ -56,6 +56,8 @@ public:
 
 	// Allocates a block of `size` bytes. Default perms are RW
 	vaddr_t alloc(vsize_t size);
+
+	void free(vaddr_t addr);
 
 	// Allocates a stack at the end of the guest memory space
 	// Returns the bottom of the stack (last valid address plus one)
@@ -105,6 +107,18 @@ public:
 	friend std::ostream& operator<<(std::ostream& os, const Mmu& mmu);
 
 private:
+	// Possible allocation states
+	enum AllocState {
+		Unused = 0,
+		Allocated,
+		Freed,
+	};
+
+	struct Allocation {
+		AllocState state;
+		vsize_t    size;
+	};
+
 	// Guest virtual memory
 	uint8_t* memory;
 	vsize_t  memory_len;
@@ -131,6 +145,8 @@ private:
 
 	// Map for every block, true if dirty
 	std::vector<uint8_t> dirty_map;
+
+	std::unordered_map<vaddr_t, Allocation> cur_allocs;
 
 	// Checks if range is inside guest memory map, throwing OutOfBounds*
 	// fault if not
