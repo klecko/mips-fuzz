@@ -25,26 +25,26 @@ public:
 
 	vsize_t memsize() const;
 
-	// Set or get a general purpose register
-	void set_reg(uint8_t reg, uint32_t val);
+	// Get or set a general purpose register
 	uint32_t get_reg(uint8_t reg) const;
+	void set_reg(uint8_t reg, uint32_t val);
 
-	// Set or get a single precission FPU register
-	void sets_reg(uint8_t reg, float val);
+	// Get or set a single precission FPU register
 	float gets_reg(uint8_t reg) const;
+	void sets_reg(uint8_t reg, float val);
 	
-	// Set or get a double precission FPU register
-	void setd_reg(uint8_t reg, double val);
+	// Get or set a double precission FPU register
 	double getd_reg(uint8_t reg) const;
+	void setd_reg(uint8_t reg, double val);
 
-	// Set or get a conditional code
-	void set_cc(uint8_t cc, bool val);
+	// Get or set a FPU condition code
 	bool get_cc(uint8_t cc) const;
+	void set_cc(uint8_t cc, bool val);
 
-	// Set or get program counter
-	void set_pc(vaddr_t addr);
+	// Get or set program counter
 	vaddr_t get_pc() const;
 	vaddr_t get_prev_pc() const;
+	void set_pc(vaddr_t addr);
 
 	// Forks the emulator and returns the child
 	Emulator fork() const;
@@ -63,6 +63,8 @@ public:
 	// Run emulator until given address, return the number of instructions
 	// executed
 	uint64_t run_until(vaddr_t pc);
+
+	vaddr_t resolve_symbol(const std::string& symbol);
 
 	friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 

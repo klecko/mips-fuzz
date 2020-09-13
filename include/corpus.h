@@ -56,7 +56,7 @@ public:
 
 private:
 	static const int COVERAGE_MAP_SIZE = 64*1024;
-	static const int MUTATED_BYTES     = 128;
+	static const int MUTATED_BYTES     = 64;
 
 	// Corpus and its lock
 	std::vector<std::string> corpus;

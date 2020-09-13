@@ -54,6 +54,8 @@ public:
 	vaddr_t get_brk() const;
 	bool set_brk(vaddr_t new_brk);
 
+	vsize_t get_alloc_size(vaddr_t addr);
+
 	// Allocates a block of `size` bytes. Default perms are RW
 	vaddr_t alloc(vsize_t size);
 

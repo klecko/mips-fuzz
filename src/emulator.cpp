@@ -177,6 +177,7 @@ void Emulator::load_elf(const vector<string>& argv){
 		{AT_PHDR,   {load_addr + phinfo.e_phoff}}, // Pointer to program headers
 		{AT_PHENT,  {phinfo.e_phentsize}},         // Size of each entry
 		{AT_PHNUM,  {phinfo.e_phnum}},             // Number of entries
+		{AT_PAGESZ, {4096}},                       // Page size
 		{AT_NULL,   {0}},                          // Auxv end
 	};
 	// We don't use push_stack or mmu.write because of misalignment checks.
@@ -463,6 +464,10 @@ uint64_t Emulator::run_until(vaddr_t pc){
 	return dummy3.instr;
 }
 
+vaddr_t Emulator::resolve_symbol(const std::string& symbol){
+
+}
+
 void Emulator::test_bp(){
 	cout << *this << endl;
 	die("test bp\n");
@@ -470,25 +475,41 @@ void Emulator::test_bp(){
 
 void Emulator::malloc_bp(){
 	vsize_t size  = regs[Reg::a0];
+	dbgprintf("malloc(%u)", size);
 	vaddr_t addr  = (size > 0 ? mmu.alloc(size) : 0);
 	regs[Reg::v0] = addr;
 	prev_pc       = pc;
 	pc            = regs[Reg::ra];
-	dbgprintf("malloc(%u) --> 0x%X\n", size, addr);
+	dbgprintf(" --> 0x%X\n", addr);
 }
 
 void Emulator::free_bp(){
 	//die("free_bp\n");
 	vsize_t addr = regs[Reg::a0];
+	dbgprintf("free(0x%X)\n", addr);
 	if (addr != 0)
 		mmu.free(addr);
 	prev_pc      = pc;
 	pc           = regs[Reg::ra];
-	dbgprintf("free(0x%X)\n", addr);
 }
 
 void Emulator::realloc_bp(){
-	die("realloc_bp\n");
+	vaddr_t addr = regs[Reg::a0];
+	vsize_t size = regs[Reg::a1];
+	dbgprintf("called from 0x%X\n", prev_pc);
+	dbgprintf("realloc(0x%X, %u)", addr, size);
+	vaddr_t new_addr = 0;
+	if (size > 0){
+		new_addr = mmu.alloc(size);
+	}
+	if (addr != 0){
+		mmu.copy_mem(new_addr, addr, min(size, mmu.get_alloc_size(addr)));
+		mmu.free(addr);
+	}
+	regs[Reg::v0] = new_addr;
+	prev_pc       = pc;
+	pc            = regs[Reg::ra];
+	dbgprintf(" --> 0x%X\n", new_addr);
 }
 
 void Emulator::memalign_bp(){

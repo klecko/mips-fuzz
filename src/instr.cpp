@@ -379,6 +379,30 @@ void Emulator::inst_COP1(uint32_t inst){
 	(this->*inst_handlers_COP1[(inst >> 21) & 0b00011111])(inst);
 }
 
+// Auxiliar functions for FPU instructions.
+// We can't do a simple cast from float to uint32_t because that actually
+// converts the float to an uint32_t and not just reinterprets the bytes.
+// Same the other way round
+// That's why these helpers are needed
+uint32_t as_u32(float f){
+	union {
+		float    value_f;
+		uint32_t value_u32;
+	} un;
+	un.value_f = f;
+	return un.value_u32;
+}
+
+float as_float(uint32_t u32){
+	union {
+		float    value_f;
+		uint32_t value_u32;
+	} un;
+	un.value_u32 = u32;
+	return un.value_f;
+}
+
+
 void Emulator::inst_or(uint32_t val){
 	inst_R_t inst(val);
 	set_reg(inst.d, get_reg(inst.s) | get_reg(inst.t));
@@ -886,11 +910,28 @@ void Emulator::inst_fmt_s(uint32_t val){
 		// C.cond.s
 		inst_c_cond_s(val);
 	} else switch (inst.funct){
+		case 0b000000: // add.s
+			sets_reg(inst.d, gets_reg(inst.s) + gets_reg(inst.t));
+			break;
+		case 0b000001: // sub.s
+			sets_reg(inst.d, gets_reg(inst.s) - gets_reg(inst.t));
+			break;
 		case 0b000010: // mul.s
 			sets_reg(inst.d, gets_reg(inst.s) * gets_reg(inst.t));
 			break;
 		case 0b000011: // div.s
 			sets_reg(inst.d, gets_reg(inst.s) / gets_reg(inst.t));
+			break;
+		case 0b000110: // mov.s
+			sets_reg(inst.d, gets_reg(inst.s));
+			break;
+		case 0b001101: // trunc.w.s
+			// Convert float to u32, then use `as_float` to avoid conversion
+			// to float
+			sets_reg(inst.d, as_float((uint32_t)gets_reg(inst.s)));
+			break;
+		case 0b010011: // movn.s
+			if (get_reg(inst.t) != 0) sets_reg(inst.d, gets_reg(inst.s));
 			break;
 		case 0b100001: // cvt.d.s
 			setd_reg(inst.d, (double)gets_reg(inst.s));
@@ -906,19 +947,51 @@ void Emulator::inst_fmt_d(uint32_t val){
 		// C.cond.d
 		inst_c_cond_d(val);
 	} else switch (inst.funct){
+		case 0b000000: // add.d
+			setd_reg(inst.d, getd_reg(inst.s) + getd_reg(inst.t));
+			break;
+		case 0b000001: // sub.d
+			setd_reg(inst.d, getd_reg(inst.s) - getd_reg(inst.t));
+			break;
 		case 0b000010: // mul.d
 			setd_reg(inst.d, getd_reg(inst.s) * getd_reg(inst.t));
 			break;
 		case 0b000011: // div.d
 			setd_reg(inst.d, getd_reg(inst.s) / getd_reg(inst.t));
 			break;
+		case 0b001101: // trunc.w.d
+			// Convert double to u32, then use `as_float` to avoid conversion
+			// to float
+			sets_reg(inst.d, as_float((uint32_t)getd_reg(inst.s)));
+			break;
+		case 0b010011: // movn.s
+			if (get_reg(inst.t) != 0) setd_reg(inst.d, getd_reg(inst.s));
+			break;
+		case 0b100000: // cvt.s.d
+			sets_reg(inst.d, (float)getd_reg(inst.s));
+			break;
 		default:
-			die("Unimplemented fmt s at 0x%X\n", prev_pc);
+			die("Unimplemented fmt d at 0x%X\n", prev_pc);
 	}
 }
 
 void Emulator::inst_fmt_w(uint32_t val){
-	die("Unimplemented fmt w at 0x%X\n", prev_pc);
+	inst_F_t inst(val);
+	if ((inst.funct & 0b110000) == 0b110000){
+		// C.cond.w doesn't exist
+		die("NANI fmt w\n");
+	} else switch (inst.funct){
+		case 0b100000: // cvt.s.w
+			// There's an u32 in FPR s, and we must convert it to float
+			sets_reg(inst.d, (float)as_u32(gets_reg(inst.s)));
+			break;
+		case 0b100001: // cvt.d.w
+			// There's an u32 in FPR s, and we must convert it to double
+			setd_reg(inst.d, (double)as_u32(gets_reg(inst.s)));
+			break;
+		default:
+			die("Unimplemented fmt w at 0x%X: %d\n", prev_pc, inst.funct);
+	}
 }
 
 void Emulator::inst_fmt_l(uint32_t val){
@@ -931,30 +1004,62 @@ void Emulator::inst_fmt_ps(uint32_t val){
 
 void Emulator::inst_mfc1(uint32_t val){
 	inst_F_t inst(val);
-	set_reg(inst.t, gets_reg(inst.s));
+	// Get lower 32 bits of the 64bits fpu register
+	set_reg(inst.t, as_u32(gets_reg(inst.s)));
 }
 
 void Emulator::inst_mfhc1(uint32_t val){
 	inst_F_t inst(val);
-	double value = getd_reg(inst.s);
-	// Get upper 32 bits
-	set_reg(inst.t, *(uint32_t*)((float*)&value+1));
+	// Get upper 32 bits of the 64bits fpu register
+	set_reg(inst.t, as_u32(gets_reg(inst.s+1)));
 }
 
 void Emulator::inst_mtc1(uint32_t val){
 	inst_F_t inst(val);
-	sets_reg(inst.s, get_reg(inst.t));
+	sets_reg(inst.s, as_float(get_reg(inst.t)));
 }
 
 void Emulator::inst_mthc1(uint32_t val){
 	inst_F_t inst(val);
-	sets_reg(inst.s+1, get_reg(inst.t));
+	sets_reg(inst.s+1, as_float(get_reg(inst.t)));
+}
+
+bool is_unordered(float val1, float val2){
+	return isnan(val1) || isnan(val2);
+}
+
+bool is_unordered(double val1, double val2){
+	return isnan(val1) || isnan(val2);
 }
 
 void Emulator::inst_c_cond_s(uint32_t val){
 	inst_F_t inst(val);
-	//uint8_t cond = inst.funct & 0b001111;
-	die("Unimplemented c.cond.s at 0x%X\n", prev_pc);
+	uint8_t cond = inst.funct & 0b001111;
+	uint8_t cc   = (inst.d >> 2) & 0b111;
+	float   val1 = gets_reg(inst.s);
+	float   val2 = gets_reg(inst.t);
+	// Ordered:   neither operand is a nan
+	// Unordered: either operand may be a nan. Return true if one of the
+	//            operands is nan
+	switch (cond){
+		case 0b0001: // un
+			set_cc(cc, is_unordered(val1, val2));
+			break;
+		case 0b0010: // eq
+			set_cc(cc, val1 == val2);
+			break;
+		case 0b0111: // ule
+			set_cc(cc, is_unordered(val1, val2) || (val1 <= val2));
+			break;
+		case 0b1100: // lt
+			set_cc(cc, val1 < val2);
+			break;
+		case 0b1110: // le
+			set_cc(cc, val1 <= val2);
+			break;
+		default:
+			die("Unimplemented c.cond.s at 0x%X: %d\n", prev_pc, cond);
+	}
 }
 
 void Emulator::inst_c_cond_d(uint32_t val){
@@ -965,13 +1070,22 @@ void Emulator::inst_c_cond_d(uint32_t val){
 	double  val2 = getd_reg(inst.t);
 	switch (cond){
 		case 0b0001: // un
-			set_cc(cc, isnan(val1) || isnan(val1));
+			set_cc(cc, is_unordered(val1, val2));
+			break;
+		case 0b0010: // eq
+			set_cc(cc, val1 == val2);
 			break;
 		case 0b0111: // ule
-			set_cc(cc, !(val1>val2));
+			set_cc(cc, is_unordered(val1, val2) || (val1 <= val2));
+			break;
+		case 0b1100: // lt
+			set_cc(cc, val1 < val2);
+			break;
+		case 0b1110: // le
+			set_cc(cc, val1 <= val2);
 			break;
 		default:
-			die("Unimplemented c.cond.d at 0x%X: %X\n", prev_pc, val);
+			die("Unimplemented c.cond.d at 0x%X: %d\n", prev_pc, cond);
 	}
 }
 

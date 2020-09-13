@@ -929,17 +929,14 @@ bool Jitter::inst_nor(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_bshfl(vaddr_t pc, uint32_t val){
 	switch ((val >> 6) & 0b11111){
-	case 0b00010: // wsbh
-		return inst_wsbh(pc, val);
-		break;
-	case 0b10000: // seb
-		return inst_seb(pc, val);
-		break;
-	case 0b11000: // seh
-		return inst_seh(pc, val);
-		break;
-	default:
-		die("Unimplemented bshfl instruction at 0x%X: 0x%X\n", pc-4, val);
+		case 0b00010: // wsbh
+			return inst_wsbh(pc, val);
+		case 0b10000: // seb
+			return inst_seb(pc, val);
+		case 0b11000: // seh
+			return inst_seh(pc, val);
+		default:
+			die("Unimplemented bshfl instruction at 0x%X: 0x%X\n", pc-4, val);
 	}
 	return false;
 }
@@ -1344,33 +1341,84 @@ bool Jitter::inst_clz(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_lwc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_I_t inst(val);
+	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
+	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
+	llvm::Value* v    = builder.CreateBitCast(read_mem(addr, 4), float_ty);
+	sets_reg(inst.t, v);
+	return false;
 }
 
 bool Jitter::inst_swc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
+	inst_I_t inst(val);
+	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
+	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
+	llvm::Value* v    = builder.CreateBitCast(gets_reg(inst.t), int32_ty);
+	write_mem(addr, v, 4);
 	return false;
 }
 
 bool Jitter::inst_ldc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
+	inst_I_t inst(val);
+	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
+	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
+	llvm::Value* v    = builder.CreateBitCast(read_mem(addr, 8), double_ty);
+	setd_reg(inst.t, v);
 	return false;
 }
 
 bool Jitter::inst_sdc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
+	inst_I_t inst(val);
+	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
+	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
+	llvm::Value* v    = builder.CreateBitCast(getd_reg(inst.t), int64_ty);
+	write_mem(addr, v, 8);
 	return false;
 }
 
 bool Jitter::inst_fmt_s(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	if ((inst.funct & 0b110000) == 0b110000){
+		// C.cond.s
+		inst_c_cond_s(pc, val);
+	} else switch (inst.funct){
+		case 0b000010: // mul.s
+			sets_reg(inst.d,
+			         builder.CreateFMul(gets_reg(inst.s), gets_reg(inst.t)));
+			break;
+		case 0b000011: // div.s
+			sets_reg(inst.d,
+			         builder.CreateFDiv(gets_reg(inst.s), gets_reg(inst.t)));
+			break;
+		case 0b100001: // cvt.d.s
+			setd_reg(inst.d, builder.CreateFPExt(gets_reg(inst.s), double_ty));
+			break;
+		default:
+			die("Unimplemented fmt s at 0x%X\n", pc-4);
+	}
+	return false;
 }
 
 bool Jitter::inst_fmt_d(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	if ((inst.funct & 0b110000) == 0b110000){
+		// C.cond.d
+		inst_c_cond_d(pc, val);
+	} else {
+		llvm::Value* value;
+		switch (inst.funct){
+			case 0b000010: // mul.d
+				value = builder.CreateFMul(getd_reg(inst.s), getd_reg(inst.t));
+				break;
+			case 0b000011: // div.d
+				value = builder.CreateFDiv(getd_reg(inst.s), getd_reg(inst.t));
+				break;
+			default:
+				die("Unimplemented fmt s at 0x%X\n", pc-4);
+		}
+		setd_reg(inst.d, value);
+	}
+	return false;
 }
 
 bool Jitter::inst_fmt_w(vaddr_t pc, uint32_t val){
@@ -1389,23 +1437,27 @@ bool Jitter::inst_fmt_ps(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_mfc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	set_reg(inst.t, builder.CreateBitCast(gets_reg(inst.s), int32_ty));
+	return false;
 }
 
 bool Jitter::inst_mfhc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	set_reg(inst.t, builder.CreateBitCast(gets_reg(inst.s+1), int32_ty));
+	return false;
 }
 
 bool Jitter::inst_mtc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	sets_reg(inst.s, builder.CreateBitCast(get_reg(inst.t), float_ty));
+	return false;
 }
 
 bool Jitter::inst_mthc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	sets_reg(inst.s+1, builder.CreateBitCast(get_reg(inst.t), float_ty));
+	return false;
 }
 
 bool Jitter::inst_c_cond_s(vaddr_t pc, uint32_t val){
@@ -1414,13 +1466,60 @@ bool Jitter::inst_c_cond_s(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_c_cond_d(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	uint8_t cond = inst.funct & 0b001111;
+	uint8_t cc   = (inst.d >> 2) & 0b111;
+	llvm::Value* val1 = getd_reg(inst.s);
+	llvm::Value* val2 = getd_reg(inst.t);
+	
+	// LLVM IR has the 'fcmp' instruction which performs exactly what we want.
+	// God bless LLVM
+	switch (cond){
+		case 0b0001: // un
+			set_cc(cc, builder.CreateFCmpUNO(val1, val2));
+			break;
+		case 0b0111: // ule
+			set_cc(cc, builder.CreateFCmpULE(val1, val2));
+			break;
+		default:
+			die("Unimplemented c.cond.d at 0x%X: %X\n", pc-4, val);
+	}
+
+	return false;
 }
 
 bool Jitter::inst_bc1(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	// Create cmp, handle delay slot
+	inst_I_t inst(val);
+	bool jump_if_true = inst.t & 1;
+	uint8_t cc = (inst.t >> 2) & 0b111;
+	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+
+	llvm::Value* cond = get_cc(cc);
+	llvm::Value* cmp  = (jump_if_true ? cond : builder.CreateNot(cond));
+	handle_inst(pc);
+
+	// Record coverage
+	if (COVERAGE){
+		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
+		if (DBG_CHECK_REPEATED_COV_ID){
+			llvm::Value* reenter_pc = builder.CreateSelect(
+				cmp,
+				builder.getInt32(jump_addr),
+				builder.getInt32(pc+4)
+			);
+			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
+					builder.getInt32(pc), cov_id);
+			return true;
+		}
+	}
+
+	// Create both blocks, branch and finish compilation
+	llvm::BasicBlock* true_block  = create_block(jump_addr);
+	llvm::BasicBlock* false_block = create_block(pc+4);
+
+	builder.Insert(llvm::BranchInst::Create(true_block, false_block, cmp));
+	return true;
 }
 
 bool Jitter::inst_cfc1(vaddr_t pc, uint32_t val){

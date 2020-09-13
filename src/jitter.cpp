@@ -85,12 +85,14 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	int32_ty     = llvm::Type::getInt32Ty(context);
 	int64_ty     = llvm::Type::getInt64Ty(context);
 	float_ty     = llvm::Type::getFloatTy(context);
+	double_ty    = llvm::Type::getDoubleTy(context);
 	int1ptr_ty   = llvm::Type::getInt1PtrTy(context);
 	int8ptr_ty   = llvm::Type::getInt8PtrTy(context);
 	int16ptr_ty  = llvm::Type::getInt16PtrTy(context);
 	int32ptr_ty  = llvm::Type::getInt32PtrTy(context);
 	int64ptr_ty  = llvm::Type::getInt64PtrTy(context);
 	floatptr_ty  = llvm::Type::getFloatPtrTy(context);
+	doubleptr_ty = llvm::Type::getDoublePtrTy(context);
 
 	// Get function arguments types
 	llvm::Type* vm_state_ty = llvm::StructType::get(context,
@@ -312,12 +314,28 @@ llvm::Value* Jitter::get_state_field(uint8_t field, const string& name){
 llvm::Value* Jitter::get_preg(uint8_t reg){
 	// Get pointer to regs[reg]
 	assert(1 <= reg && reg <= 33); // 0 is reg zero
-	llvm::Value* p_reg  = builder.CreateInBoundsGEP(
+	llvm::Value* p_reg = builder.CreateInBoundsGEP(
 		state.p_regs,
 		builder.getInt32(reg),
 		"p_reg" + to_string(reg) + "_"
 	);
 	return p_reg;
+}
+
+llvm::Value* Jitter::gets_preg(uint8_t reg){
+	assert(0 <= reg && reg <= 31);
+	llvm::Value* p_fpreg = builder.CreateInBoundsGEP(
+		state.p_fpregs,
+		builder.getInt32(reg),
+		"p_fpreg" + to_string(reg) + "_"
+	);
+	return p_fpreg;
+}
+
+llvm::Value* Jitter::getd_preg(uint8_t reg){
+	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
+	llvm::Value* p_fpreg = gets_preg(reg);
+	return builder.CreateBitCast(p_fpreg, doubleptr_ty);
 }
 
 llvm::Value* Jitter::get_reg(uint8_t reg){
@@ -345,6 +363,61 @@ void Jitter::set_reg(uint8_t reg, llvm::Value* val){
 
 void Jitter::set_reg(uint8_t reg, uint32_t val){
 	set_reg(reg, builder.getInt32(val));
+}
+
+llvm::Value* Jitter::gets_reg(uint8_t reg){
+	llvm::Value* p_fpreg = gets_preg(reg);
+	return builder.CreateLoad(p_fpreg);
+}
+
+void Jitter::sets_reg(uint8_t reg, llvm::Value* val){
+	llvm::Value* p_fpreg = gets_preg(reg);
+	builder.CreateStore(val, p_fpreg);
+}
+
+void Jitter::sets_reg(uint8_t reg, float val){
+	sets_reg(reg, llvm::ConstantFP::get(context, llvm::APFloat(val)));
+}
+
+llvm::Value* Jitter::getd_reg(uint8_t reg){
+	llvm::Value* p_fpreg = getd_preg(reg);
+	return builder.CreateLoad(p_fpreg);
+}
+
+void Jitter::setd_reg(uint8_t reg, llvm::Value* val){
+	llvm::Value* p_fpreg = getd_preg(reg);
+	builder.CreateStore(val, p_fpreg);
+}
+
+void Jitter::setd_reg(uint8_t reg, double val){
+	setd_reg(reg, llvm::ConstantFP::get(context, llvm::APFloat(val)));
+}
+
+llvm::Value* Jitter::get_cc(uint8_t cc){
+	assert(0 <= cc && cc <= 7);
+	llvm::Value* ccs = builder.CreateLoad(state.p_ccs);
+	llvm::Value* cc_val = builder.CreateTrunc(
+		builder.CreateLShr(ccs, builder.getInt8(cc)),
+		int1_ty
+	);
+	return cc_val;
+}
+
+void Jitter::set_cc(uint8_t cc, llvm::Value* val){
+	assert(0 <= cc && cc <= 7);
+	llvm::Value* ccs = builder.CreateLoad(state.p_ccs);
+	llvm::Value* bit = builder.getInt8(1 << cc);
+	llvm::Value* cmp = builder.CreateICmpEQ(val, builder.getTrue());
+	llvm::Value* new_ccs = builder.CreateSelect(
+		cmp,
+		builder.CreateOr(ccs, bit),
+		builder.CreateAnd(ccs, builder.CreateNot(bit))
+	);
+	builder.CreateStore(new_ccs, state.p_ccs);
+}
+
+void Jitter::set_cc(uint8_t cc, bool val){
+	set_cc(cc, builder.getInt1(val));
 }
 
 llvm::Value* Jitter::get_pmemory(llvm::Value* addr){
@@ -518,7 +591,7 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm){
 	llvm::Type* ptr_ty  = llvm::Type::getIntNPtrTy(context, len*8);
 
 	// Compute permission mask for given len
-	uint32_t perms_mask = 0;
+	uint64_t perms_mask = 0;
 	for (vsize_t i = 0; i < len; i++)
 		perms_mask |= (perm << (i*8));
 	llvm::Value* perms_mask_val = llvm::ConstantInt::get(mask_ty, perms_mask);

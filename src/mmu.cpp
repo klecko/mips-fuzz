@@ -34,6 +34,7 @@ Mmu::Mmu(const Mmu& other){
 	dirty_vec  = new vaddr_t[memory_len/DIRTY_BLOCK_SIZE + 1];
 	dirty_size = other.dirty_size;
 	dirty_map  = vector<uint8_t>(other.dirty_map);
+	cur_allocs = other.cur_allocs;
 	memcpy(memory, other.memory, memory_len);
 	memcpy(perms, other.perms, memory_len);
 	memcpy(dirty_vec, other.dirty_vec, dirty_size);
@@ -67,6 +68,7 @@ void swap(Mmu& first, Mmu& second){
 	swap(first.dirty_vec, second.dirty_vec);
 	swap(first.dirty_size, second.dirty_size);
 	swap(first.dirty_map, second.dirty_map);
+	swap(first.cur_allocs, second.cur_allocs);
 }
 
 uint8_t* Mmu::get_memory(){
@@ -293,12 +295,18 @@ string Mmu::read_string(vaddr_t addr) const {
 	return result;
 }
 
+vsize_t Mmu::get_alloc_size(vaddr_t addr){
+	return cur_allocs[addr].size;
+}
+
 vaddr_t Mmu::alloc(vsize_t size){
 	assert(size > 0);
 
-	// Check out of memory
-	if (next_alloc + size > stack)
-		die("Out of memory allocating 0x%X bytes\n", size);
+	// Check out of memory and overflow
+	if (next_alloc + size > stack){
+		dbgprintf("Out of memory allocating 0x%X bytes\n", size);
+		return 0;
+	}
 	if (next_alloc + size < next_alloc){
 		dbgprintf("Overflow allocating 0x%X bytes\n", size);
 		return 0;
@@ -319,7 +327,7 @@ vaddr_t Mmu::alloc(vsize_t size){
 	// Set this addr as allocated
 	cur_allocs[current_alloc] = {AllocState::Allocated, size};
 
-	dbgprintf("alloc(0x%X) --> 0x%X\n", size, current_alloc);
+	//dbgprintf("alloc(0x%X) --> 0x%X\n", size, current_alloc);
 	return current_alloc;
 }
 
@@ -386,6 +394,7 @@ void Mmu::reset(const Mmu& other){
 	brk        = other.brk;
 	min_brk    = other.min_brk;
 	max_brk    = other.max_brk;
+	cur_allocs = other.cur_allocs;
 }
 
 uint8_t parse_perm(const string& flag){

@@ -123,12 +123,14 @@ private:
 	llvm::Type* int32_ty;
 	llvm::Type* int64_ty;
 	llvm::Type* float_ty;
+	llvm::Type* double_ty;
 	llvm::Type* int1ptr_ty;
 	llvm::Type* int8ptr_ty;
 	llvm::Type* int32ptr_ty;
 	llvm::Type* int16ptr_ty;
 	llvm::Type* int64ptr_ty;
 	llvm::Type* floatptr_ty;
+	llvm::Type* doubleptr_ty;
 
 
 	// Attempt to load JIT code associated to `name` from disk cache
@@ -137,15 +139,34 @@ private:
 	// Read a field from vm_state struct
 	llvm::Value* get_state_field(uint8_t field, const std::string& name);
 
-	// Get pointer to register `reg`
+	// Get pointer to general purpose register 
 	llvm::Value* get_preg(uint8_t reg);
 
-	// Get value of register `reg`
-	llvm::Value* get_reg(uint8_t reg);
+	// Get pointer to single precission FPU register
+	llvm::Value* gets_preg(uint8_t reg);
 
-	// Set register `reg` to `val`
+	// Get pointer to double precission FPU register
+	llvm::Value* getd_preg(uint8_t reg);
+
+	// Get or set a general purpose register
+	llvm::Value* get_reg(uint8_t reg);
 	void set_reg(uint8_t reg, llvm::Value* val);
 	void set_reg(uint8_t reg, uint32_t val);
+
+	// Get or set a single precission FPU register
+	llvm::Value* gets_reg(uint8_t reg);
+	void sets_reg(uint8_t reg, llvm::Value* val);
+	void sets_reg(uint8_t reg, float val);
+
+	// Get or set a single double FPU register
+	llvm::Value* getd_reg(uint8_t reg);
+	void setd_reg(uint8_t reg, llvm::Value* val);
+	void setd_reg(uint8_t reg, double val);
+
+	// Get or set a FPU condition code
+	llvm::Value* get_cc(uint8_t cc);
+	void set_cc(uint8_t cc, llvm::Value* val);
+	void set_cc(uint8_t cc, bool val);
 
 	// Get pointer to virtual memory address `addr`
 	llvm::Value* get_pmemory(llvm::Value* addr);

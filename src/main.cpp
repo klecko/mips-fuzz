@@ -90,8 +90,8 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 			local_stats.cov_cycles += rdtsc1() - cycles;
 
 			try {
-				//runner.run_interpreter(input, cov, local_stats);
-				runner.run_jit(input, cov, jit_cache, local_stats);
+				runner.run_interpreter(input, cov, local_stats);
+				//runner.run_jit(input, cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
@@ -149,18 +149,19 @@ int main(){
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(
-		8 * 1024 * 1024,                // memory
-		"../test_bins/readelf",         // path to elf
-		{"readelf", "-e", "input_file"} // argv
+		32 * 1024 * 1024,                     // memory
+		"../test_bins/stegdetect/stegdetect", // path to elf
+		{"stectdetect", "input_file"}         // argv
 	);
 	JIT::jit_cache_t jit_cache(emu.memsize());
 
 	// Run until open before forking
-	// test:    0x00423e8c | 0x41d6e4 | 0x00423e7c
-	// xxd:     0x00429e6c
-	// readelf: 0x004c081c
+	// test:       0x00423e8c | 0x41d6e4 | 0x00423e7c
+	// xxd:        0x00429e6c
+	// readelf:    0x004c081c
+	// stegdetect: 0x0045d40c
 	try {
-		uint64_t insts = emu.run_until(0x004c081c);//0x00423ec8);
+		uint64_t insts = emu.run_until(0x0045d40c);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault running before forking" << endl;
