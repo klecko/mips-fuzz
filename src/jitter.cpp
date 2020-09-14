@@ -50,9 +50,9 @@ struct jit_init {
 };
 
 Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
-               const Breakpoints& breakpoints):
+               const Breakpoints& breakpoints, const EmuOptions& options):
 	mmu(mmu), cov_map_size(cov_map_size), breakpoints(breakpoints),
-	p_context(new llvm::LLVMContext),
+	options(options), p_context(new llvm::LLVMContext),
 	p_module(new llvm::Module("module", *p_context)),
 	context(*p_context), module(*p_module), builder(context)
 {
@@ -172,7 +172,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	// Jump from entry to `bb`. LLVM doesn't allow jumping to the first basic
 	// block of a function. This way `bb` is the second basic block and we can
 	// jump to it
-	llvm::BranchInst::Create(bb, entry_block);
+	builder.CreateBr(bb);
 
 	// JIT module
 	if (llvm::verifyModule(module, &llvm::errs())){
@@ -486,7 +486,7 @@ void Jitter::vm_exit(ExitInfo::ExitReason reason, llvm::Value* reenter_pc,
 
 uint32_t Jitter::get_new_cov_id(size_t cov_map_size){
 	if (next_cov_id >= cov_map_size)
-		die("Out of coverage ids\n");
+		die("Out of coverage ids: %u/%lu\n", next_cov_id, cov_map_size);
 
 	//cout << "Returning cov id " << next_cov_id << endl;
 	uint32_t ret = next_cov_id++;
@@ -579,7 +579,7 @@ void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len){
 		"last_addr"
 	);
 	llvm::Value* cmp = builder.CreateICmpUGE(last_addr, memsize, "cmp_bounds");
-	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
+	builder.CreateCondBr(cmp, fault_path, nofault_path);
 
 	// Continue building nofault path
 	builder.SetInsertPoint(nofault_path);
@@ -612,7 +612,7 @@ void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm){
 	// And perm value with perm_masks, check if they're equal and branch
 	llvm::Value* result = builder.CreateAnd(perm_val, perms_mask_val);
 	llvm::Value* cmp = builder.CreateICmpNE(result, perms_mask_val, "cmp_perms");
-	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
+	builder.CreateCondBr(cmp, fault_path, nofault_path);
 
 	// Continue building nofault path
 	builder.SetInsertPoint(nofault_path);
@@ -633,7 +633,7 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len){
 		builder.getInt32(0),
 		"cmp_align"
 	);
-	builder.Insert(llvm::BranchInst::Create(fault_path, nofault_path, cmp));
+	builder.CreateCondBr(cmp, fault_path, nofault_path);
 
 	// Continue building nofault path
 	builder.SetInsertPoint(nofault_path);
@@ -694,8 +694,7 @@ void Jitter::set_dirty_mem(llvm::Value* addr, vsize_t len){
 	llvm::Value* dirty_value = builder.CreateLoad(p_dirty_value, "dirty_value");
 	llvm::Value* cmp_dirty = 
 		builder.CreateICmpEQ(dirty_value, builder.getInt8(0), "cmp_dirty");
-	builder.Insert(llvm::BranchInst::Create(for_register_dirty, for_cond,
-	                                        cmp_dirty));
+	builder.CreateCondBr(cmp_dirty, for_register_dirty, for_cond);
 
 	// For register dirty. Block was not dirty: set it as dirty in the map and
 	// add it to the vector.
@@ -715,7 +714,7 @@ void Jitter::set_dirty_mem(llvm::Value* addr, vsize_t len){
 	block->addIncoming(block_inc, for_cond);
 	llvm::Value* cmp_exit  = builder.CreateICmpUGE(block_inc, block_end,
 	                                               "cmp_exit");
-	builder.Insert(llvm::BranchInst::Create(for_end, for_body, cmp_exit));
+	builder.CreateCondBr(cmp_exit, for_end, for_body);
 
 	// For end. Continue with the store
 	builder.SetInsertPoint(for_end);
@@ -810,16 +809,20 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 
 bool Jitter::handle_inst(vaddr_t pc){
 	// Log state
-	if (false){
+	if (options.dump_pc || options.dump_regs){
 		llvm::Value* num_inst = builder.CreateLoad(p_instr);
-		llvm::Value* i_dump = builder.CreateMul(num_inst, builder.getInt64(35));
+		llvm::Value* i_dump = builder.CreateMul(num_inst, builder.getInt32(35));
 		llvm::Value* regs_dump = &function->arg_begin()[3];
 		llvm::Value* reg_dump  = builder.CreateInBoundsGEP(regs_dump, i_dump);
-		for (int i = 0; i < 34; i++){
-			llvm::Value* p_reg = builder.CreateInBoundsGEP(reg_dump, builder.getInt32(i));
-			builder.CreateStore(get_reg(i), p_reg);
+		if (options.dump_regs){
+			for (int i = 0; i < 34; i++){
+				llvm::Value* p_reg = 
+					builder.CreateInBoundsGEP(reg_dump, builder.getInt32(i));
+				builder.CreateStore(get_reg(i), p_reg);
+			}
 		}
-		llvm::Value* p_reg = builder.CreateInBoundsGEP(reg_dump, builder.getInt32(34));
+		llvm::Value* p_reg =
+			builder.CreateInBoundsGEP(reg_dump, builder.getInt32(34));
 		builder.CreateStore(builder.getInt32(pc), p_reg);
 	}
 

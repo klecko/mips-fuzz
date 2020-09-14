@@ -16,6 +16,12 @@ enum Reg {
 	hi,   lo,
 };
 
+struct EmuOptions {
+	bool     dump_pc   = false;
+	bool     dump_regs = false;
+	uint32_t max_dump  = 20000;
+};
+
 namespace JIT {
 
 // Struct that will be modified by the jitted code when returning to notify
@@ -69,7 +75,7 @@ typedef std::vector<jit_block_t> jit_cache_t;
 class Jitter {
 public:
 	Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
-	       const Breakpoints& breakpoints);
+	       const Breakpoints& breakpoints, const EmuOptions& options);
 	jit_block_t get_result();
 
 private:
@@ -83,6 +89,7 @@ private:
 	const Mmu& mmu;
 	size_t cov_map_size;
 	const Breakpoints& breakpoints;
+	const EmuOptions& options;
 
 	static uint32_t next_cov_id;
 	static std::unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> cov_ids;

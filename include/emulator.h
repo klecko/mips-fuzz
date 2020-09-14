@@ -17,8 +17,7 @@ struct RunTimeout : std::exception {};
 
 class Emulator {
 public:
-	// Interpreter instruction handler
-	typedef void (Emulator::*const inst_handler_t)(uint32_t);
+	EmuOptions options;
 
 	Emulator(vsize_t mem_size, const std::string& filepath,
 	         const std::vector<std::string>& argv);
@@ -52,14 +51,13 @@ public:
 	// Resets the emulator to the parent it was previously forked from
 	void reset(const Emulator& other);
 
-	// Perform run with provided input using the interpreter
-	void run_interpreter(const std::string& input, cov_t& cov,
-	                     Stats& local_stats);
+	// Enable the JIT using given jit cache
+	void enable_jit(JIT::jit_cache_t* jit_cache);
 
-	// Perform run with provided input using the JIT
-	void run_jit(const std::string& input, cov_t& cov, 
-	             JIT::jit_cache_t& jit_cache, Stats& local_stats);
+	// Run the emulator with provided input
+	void run(const std::string& input, cov_t& cov, Stats& local_stats);
 
+	// Run the emulator loading the input from given file
 	void run_file(const std::string& filepath);
 
 	// Run emulator until given address, return the number of instructions
@@ -72,6 +70,9 @@ public:
 
 private:
 	static const uint64_t INSTR_TIMEOUT = 100000000;
+
+	// Interpreter instruction handler
+	typedef void (Emulator::*const inst_handler_t)(uint32_t);
 
 	// Memory
 	Mmu mmu;
@@ -114,6 +115,8 @@ private:
 
 	// Breakpoints, indexed by address
 	Breakpoints breakpoints;
+
+	JIT::jit_cache_t* jit_cache;
 
 	// Load `elf` into memory, allocate stack and set up argv and company
 	void load_elf(const std::vector<std::string>& args);
@@ -168,7 +171,18 @@ private:
 
 	void handle_rdhwr(uint8_t hwr, uint8_t reg);
 
+	// Run a single instruction (interpreter)
 	void run_inst(cov_t& cov, Stats& local_stats, bool record_cov=true);
+
+	// Perform run with provided input using the interpreter
+	void run_interpreter(const std::string& input, cov_t& cov,
+	                     Stats& local_stats);
+
+	// Perform run with provided input using the JIT
+	void run_jit(const std::string& input, cov_t& cov, 
+	             JIT::jit_cache_t& jit_cache, Stats& local_stats);
+
+	void dump(std::ostream& os, bool dump_pc, bool dump_regs) const;
 
 	// Instruction handlers
 	static const inst_handler_t inst_handlers[];

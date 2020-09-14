@@ -27,7 +27,8 @@ struct branch_hasher {
 
 Emulator::Emulator(vsize_t mem_size, const string& filepath,
                    const vector<string>& argv):
-	mmu(mem_size), elf(filepath), breakpoints(mem_size, elf.get_symbols())
+	options{}, mmu(mem_size), elf(filepath),
+	breakpoints(mem_size, elf.get_symbols())
 {
 	memset(regs, 0, sizeof(regs));
 	hi        = 0;
@@ -43,6 +44,7 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	running   = false;
 	input     = NULL;
 	input_sz  = 0;
+	jit_cache = NULL;
 	load_elf(argv);
 	set_bps();
 	//Jitter(0x41df90, mmu, 128*1024, breakpoints, this);
@@ -228,6 +230,17 @@ void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
 	}
 }
 
+void Emulator::enable_jit(JIT::jit_cache_t* jit_cache){
+	this->jit_cache = jit_cache;
+}
+
+void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
+	if (jit_cache)
+		run_jit(input, cov, *jit_cache, local_stats);
+	else
+		run_interpreter(input, cov, local_stats);
+}
+
 void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
 	// Unlike in the JIT, it isn't worth having unique coverage ids here.
 	// We would need to store them in a data structure, and check it every time
@@ -265,6 +278,8 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats, bool record_cov){
 			if (record_cov) add_coverage(cov, pc_bf_bp, pc);
 	}
 	local_stats.bp_cycles += rdtsc2() - cycles;
+
+	dump(cout, options.dump_pc, options.dump_regs);
 
 	// Fetch current instruction
 	cycles = rdtsc2();
@@ -332,6 +347,23 @@ const char* regs_map[] = {
 	"gp", "sp", "fp", "ra",
 	"hi", "lo"
 };
+
+void dump_regs(uint32_t regs_state[][35], uint32_t n, bool all_regs){
+	for (uint32_t h = 0; h < n; h++){
+		cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
+		cout << "PC:  " << setw(8) << regs_state[h][34] << endl;
+		if (all_regs){
+			for (int i = 0; i < 34; i++){
+				cout << "$" << regs_map[i] << ": " << setw(8) 
+						<< regs_state[h][i] << "\t";
+				if ((i+1)%8 == 0)
+					cout << endl;
+			}
+		}
+		//cout << endl << endl;
+	}
+}
+
 void Emulator::run_jit(const string& input, cov_t& cov, 
                        JIT::jit_cache_t& jit_cache, Stats& local_stats)
 {
@@ -353,7 +385,7 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 	};
 	JIT::ExitInfo exit_inf;
 	uint8_t*  cov_map = cov.data();
-	uint32_t  regs_state[2000][35];
+	uint32_t  regs_state[20000][35];
 	uint32_t  ret;
 
 	// Number of instructions executed in current run
@@ -367,7 +399,8 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 		cycles = rdtsc2(); // jit_cache_cycles
 		jit_block = jit_cache[pc/4];
 		if (!jit_block){
-			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints).get_result();
+			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints, options)
+				.get_result();
 			jit_cache[pc/4] = jit_block;
 		}
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
@@ -436,17 +469,8 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 			throw RunTimeout();
 
 		// DUMP REGS
-		if (false){
-			for (uint32_t h = 0; h < ret; h++){
-				cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
-				cout << "PC:  " << setw(8) << regs_state[h][34] << endl;
-				for (int i = 0; i < 34; i++){
-					cout << "$" << regs_map[i] << ": " << setw(8) << regs_state[h][i] << "\t";
-					if ((i+1)%8 == 0)
-						cout << endl;
-				}
-				cout << endl << endl;
-			}
+		if (options.dump_pc || options.dump_regs){
+			dump_regs(regs_state, ret, options.dump_regs);
 		}
 		pc = exit_inf.reenter_pc;
 		prev_pc = pc; // not sure about this, we'll see
@@ -454,16 +478,19 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 }
 
 void Emulator::run_file(const std::string& filepath){
-	cout << "Running file " << filepath << endl;
 	ifstream ifs(filepath);
 	ostringstream ss;
 	ss << ifs.rdbuf();
+	if (!ifs.good())
+		die("Error reading file %s\n", filepath.c_str());
 
-	cov_t dummy1(1);
+	cout << "Running file " << filepath << endl;
+
+	cov_t dummy1(64*1024);
 	Stats dummy2;
 
 	try {
-		run_interpreter(ss.str(), dummy1, dummy2);
+		run(ss.str(), dummy1, dummy2);
 	} catch (const Fault& f){
 		cout << "[PC: 0x" << hex << pc << "] " << f << endl;
 	} catch (const RunTimeout& t){
@@ -664,6 +691,7 @@ vaddr_t Emulator::sys_mmap2(vaddr_t addr, vsize_t length, uint32_t prot,
                             uint32_t flags, uint32_t fd, uint32_t pgoffset,
                             uint32_t& error)
 {
+	cout << *this;
 	die("mmap2(0x%X, 0x%X, 0x%X, 0x%X, %d, 0x%X)\n", addr, length, prot,
 	    flags, fd, pgoffset);
 	return 0;
@@ -1044,17 +1072,26 @@ void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
 	set_reg(reg, result);
 }
 
-ostream& operator<<(ostream& os, const Emulator& emu){
+void Emulator::dump(ostream& os, bool dump_pc, bool dump_regs) const {
 	os << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
-	os << "PC:  " << setw(8) << emu.pc << endl;
-	for (int i = 0; i < 32; i++){
-		os << "$" << regs_map[i] << ": " << setw(8) << emu.regs[i] << "\t";
-		if ((i+1)%8 == 0)
-			os << endl;
+	if (dump_pc){
+		os << "PC:  " << setw(8) << pc << endl;
 	}
-	os << "$hi: " << setw(8) << hi << "\t$lo: " << setw(8) << lo << endl;
-	os << endl;
-	for (int i = 0; i < 32; i+=2){
+
+	if (dump_regs){
+		for (int i = 0; i < 32; i++){
+			os << "$" << regs_map[i] << ": " << setw(8) << regs[i] << "\t";
+			if ((i+1)%8 == 0)
+				os << endl;
+		}
+		os << "$hi: " << setw(8) << hi << "\t$lo: " << setw(8) << lo << endl;
+		os << endl;
+	}
+}
+
+ostream& operator<<(ostream& os, const Emulator& emu){
+	emu.dump(os, true, true);
+	/* for (int i = 0; i < 32; i+=2){
 		os << "$f" << setw(2) << i << ": " << setw(8) << emu.getd_reg(i) << "\t";
 		if ((i+2) % 16 == 0)
 			os << endl;
@@ -1065,7 +1102,7 @@ ostream& operator<<(ostream& os, const Emulator& emu){
 
 	for (const auto& f : emu.open_files)
 		cout << "file fd " << f.first << ": " << f.second << endl;
-	os << dec;
+	os << dec; */
 
 	return os;
 }
