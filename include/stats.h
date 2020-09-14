@@ -15,6 +15,7 @@ struct Stats {
 	uint64_t cov {0};
 	uint64_t crashes {0};
 	uint64_t timeouts {0};
+	uint64_t ooms {0};
 	cycle_t  total_cycles {0};
 	cycle_t  reset_cycles {0};
 	cycle_t  run_cycles {0};
@@ -34,6 +35,7 @@ struct Stats {
 		cov               += stats.cov;
 		crashes           += stats.crashes;
 		timeouts          += stats.timeouts;
+		ooms              += stats.ooms;
 		total_cycles      += stats.total_cycles;
 		reset_cycles      += stats.reset_cycles;
 		run_cycles        += stats.run_cycles;

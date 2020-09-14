@@ -20,7 +20,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 	double minstrps, fcps, reset_time, run_time, cov_time, inst_handl_time,
 	       fetch_inst_time, jump_time, bp_time, corpus_sz,
 	       jit_cache_time, vm_exit_time;
-	uint64_t cases, uniq_crashes, crashes, timeouts, cov, corpus_n;
+	uint64_t cases, uniq_crashes, crashes, timeouts, ooms, cov, corpus_n;
 	while (true){
 		this_thread::sleep_for(chrono::seconds(1));
 		elapsed++;
@@ -33,6 +33,7 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		uniq_crashes    = corpus.get_uniq_crashes_size();
 		crashes         = stats.crashes;
 		timeouts        = stats.timeouts;
+		ooms            = stats.ooms;
 		reset_time      = (double)stats.reset_cycles / stats.total_cycles;
 		run_time        = (double)stats.run_cycles / stats.total_cycles;
 		cov_time        = (double)stats.cov_cycles / stats.total_cycles;
@@ -44,9 +45,9 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		vm_exit_time    = (double)stats.vm_exit_cycles / stats.total_cycles;
 		printf("[%u secs] cases: %lu, minstrps: %.3f, fcps: %.3f, cov: %lu, "
 		       "corpus: %lu/%.3fKB, uniq crashes: %lu, crashes: %lu, "
-		       "timeouts: %lu\n",
+		       "timeouts: %lu, ooms: %lu\n",
 		       elapsed, cases, minstrps, fcps, cov, corpus_n, corpus_sz,
-		       uniq_crashes, crashes, timeouts);
+		       uniq_crashes, crashes, timeouts, ooms);
 
 		if (TIMETRACE >= 1)
 			printf("\treset: %.3f, run: %.3f, cov: %.3f\n",
@@ -60,9 +61,12 @@ void print_stats(Stats& stats, const Corpus& corpus){
 	}
 }
 
-void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
+void worker(int id, const Emulator& parent, Corpus& corpus,
             JIT::jit_cache_t& jit_cache, Stats& stats)
 {
+	// The emulator we'll be running
+	Emulator runner = parent.fork();
+
 	// Custom RNG: avoids locks and simpler
 	Rng rng;
 
@@ -72,7 +76,6 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 	// Recorded coverage in current run. It is reported to the corpus after
 	// each run
 	std::vector<uint8_t> cov;
-	size_t covsize = corpus.get_cov_map_size();
 
 	// Main loop
 	while (true){
@@ -86,21 +89,21 @@ void worker(int id, Emulator runner, const Emulator& parent, Corpus& corpus,
 
 			// Clear coverage
 			cycles = rdtsc1(); // cov_cycles1
-			cov.assign(covsize, 0);
+			cov.assign(Corpus::COVERAGE_MAP_SIZE, 0);
 			local_stats.cov_cycles += rdtsc1() - cycles;
 
 			try {
-				runner.run_interpreter(input, cov, local_stats);
-				//runner.run_jit(input, cov, jit_cache, local_stats);
+				//runner.run_interpreter(input, cov, local_stats);
+				runner.run_jit(input, cov, jit_cache, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
 				corpus.report_crash(id, runner.get_prev_pc(), f);
-
 			} catch (const RunTimeout&) {
 				// Timeout
-				cout << "TIMEOUT" << endl;
 				local_stats.timeouts++;
+			} catch (const RunOOM&) {
+				local_stats.ooms++;
 			}
 
 			local_stats.cases++;
@@ -149,11 +152,11 @@ int main(){
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(
-		32 * 1024 * 1024,                     // memory
+		256 * 1024 * 1024,                    // memory
 		"../test_bins/stegdetect/stegdetect", // path to elf
 		{"stectdetect", "input_file"}         // argv
 	);
-	JIT::jit_cache_t jit_cache(emu.memsize());
+	JIT::jit_cache_t jit_cache(emu.memsize()/4);
 
 	// Run until open before forking
 	// test:       0x00423e8c | 0x41d6e4 | 0x00423e7c
@@ -174,7 +177,7 @@ int main(){
 	cpu_set_t cpu;
 	vector<thread> threads;
 	for (int i = 0; i < num_threads; i++){
-		thread t = thread(worker, i, emu.fork(), ref(emu), ref(corpus),
+		thread t = thread(worker, i, ref(emu), ref(corpus),
 		                  ref(jit_cache), ref(stats));
 		CPU_ZERO(&cpu);
 		CPU_SET(i, &cpu);

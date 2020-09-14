@@ -61,10 +61,6 @@ size_t Corpus::memsize() const {
 	return sz;
 }
 
-size_t Corpus::get_cov_map_size() const {
-	return recorded_cov.size();
-}
-
 size_t Corpus::get_cov() const {
 	return cov_n;
 }

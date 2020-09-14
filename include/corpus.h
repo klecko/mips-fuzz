@@ -33,12 +33,14 @@ typedef std::vector<std::pair<vaddr_t, Fault>> crashes_t;
 
 class Corpus {
 public:
+	static const int COVERAGE_MAP_SIZE = 64*1024;
+	static const int MUTATED_BYTES     = 64;
+
 	Corpus(int nthreads, const std::string& path);
 
 	size_t size() const;
 	size_t memsize() const;
 
-	size_t get_cov_map_size() const;
 	size_t get_cov() const;
 	size_t get_uniq_crashes_size() const;
 
@@ -55,9 +57,6 @@ public:
 	void report_crash(int id, vaddr_t pc, const Fault& fault);
 
 private:
-	static const int COVERAGE_MAP_SIZE = 64*1024;
-	static const int MUTATED_BYTES     = 64;
-
 	// Corpus and its lock
 	std::vector<std::string> corpus;
 	std::atomic_flag lock_corpus;

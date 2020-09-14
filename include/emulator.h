@@ -60,6 +60,8 @@ public:
 	void run_jit(const std::string& input, cov_t& cov, 
 	             JIT::jit_cache_t& jit_cache, Stats& local_stats);
 
+	void run_file(const std::string& filepath);
+
 	// Run emulator until given address, return the number of instructions
 	// executed
 	uint64_t run_until(vaddr_t pc);
@@ -69,7 +71,7 @@ public:
 	friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 
 private:
-	static const uint64_t INSTR_TIMEOUT = 10000000;
+	static const uint64_t INSTR_TIMEOUT = 100000000;
 
 	// Memory
 	Mmu mmu;

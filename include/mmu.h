@@ -15,6 +15,8 @@ not spending much time reseting anyway
 Maybe reduce unnecesary sanity checks
 */
 
+struct RunOOM : std::exception {};
+
 class Mmu {
 public:
 	static const uint8_t NO_PERM    = 0;        // No permissions

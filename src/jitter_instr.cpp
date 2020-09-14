@@ -18,6 +18,10 @@ using namespace JIT;
 // after each code coverage event
 #define DBG_CHECK_REPEATED_COV_ID 0
 
+// Helpers for FPU instructions
+#define as_u32(value) builder.CreateBitCast(value, int32_ty)
+#define as_float(value) builder.CreateBitCast(value, float_ty)
+
 // Instruction handlers indexed by opcode
 const Jitter::inst_handler_t Jitter::inst_handlers[] = {
 	&Jitter::inst_R,             // 000 000
@@ -1335,8 +1339,6 @@ bool Jitter::inst_clz(vaddr_t pc, uint32_t val){
 	);
 	llvm::ConstantInt* fals3 = llvm::ConstantInt::getFalse(context);
 	set_reg(inst.d, builder.CreateCall(ctlz_i32, {get_reg(inst.s), fals3}));
-	//llvm::outs() << module;
-	//die("ctlz\n");
 	return false;
 }
 
@@ -1344,7 +1346,7 @@ bool Jitter::inst_lwc1(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* v    = builder.CreateBitCast(read_mem(addr, 4), float_ty);
+	llvm::Value* v    = as_float(read_mem(addr, 4));
 	sets_reg(inst.t, v);
 	return false;
 }
@@ -1353,7 +1355,7 @@ bool Jitter::inst_swc1(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* v    = builder.CreateBitCast(gets_reg(inst.t), int32_ty);
+	llvm::Value* v    = as_u32(gets_reg(inst.t));
 	write_mem(addr, v, 4);
 	return false;
 }
@@ -1382,6 +1384,13 @@ bool Jitter::inst_fmt_s(vaddr_t pc, uint32_t val){
 		// C.cond.s
 		inst_c_cond_s(pc, val);
 	} else switch (inst.funct){
+		case 0b000000: // add.s
+			sets_reg(inst.d,
+			         builder.CreateFAdd(gets_reg(inst.s), gets_reg(inst.t)));
+			break;
+		case 0b000001: // sub.s
+			sets_reg(inst.d,
+			         builder.CreateFSub(gets_reg(inst.s), gets_reg(inst.t)));
 		case 0b000010: // mul.s
 			sets_reg(inst.d,
 			         builder.CreateFMul(gets_reg(inst.s), gets_reg(inst.t)));
@@ -1390,6 +1399,27 @@ bool Jitter::inst_fmt_s(vaddr_t pc, uint32_t val){
 			sets_reg(inst.d,
 			         builder.CreateFDiv(gets_reg(inst.s), gets_reg(inst.t)));
 			break;
+		case 0b000110: // mov.s
+			sets_reg(inst.d, gets_reg(inst.s));
+			break;
+		case 0b001101: // trunc.w.s
+			// Convert float to u32, then use `as_float` to use `sets_reg`
+			sets_reg(inst.d,
+			         as_float(builder.CreateFPToUI(gets_reg(inst.s),int32_ty)));
+			break;
+		case 0b010011: { // movn.s
+			// Hope this shit gets optimized
+			llvm::Value* cmp = builder.CreateICmpNE(
+				get_reg(inst.t),
+				builder.getInt32(0)
+			);
+			sets_reg(inst.d, builder.CreateSelect(
+				cmp,
+				gets_reg(inst.s),
+				gets_reg(inst.d)
+			));
+			break;
+		}
 		case 0b100001: // cvt.d.s
 			setd_reg(inst.d, builder.CreateFPExt(gets_reg(inst.s), double_ty));
 			break;
@@ -1404,26 +1434,70 @@ bool Jitter::inst_fmt_d(vaddr_t pc, uint32_t val){
 	if ((inst.funct & 0b110000) == 0b110000){
 		// C.cond.d
 		inst_c_cond_d(pc, val);
-	} else {
-		llvm::Value* value;
-		switch (inst.funct){
-			case 0b000010: // mul.d
-				value = builder.CreateFMul(getd_reg(inst.s), getd_reg(inst.t));
-				break;
-			case 0b000011: // div.d
-				value = builder.CreateFDiv(getd_reg(inst.s), getd_reg(inst.t));
-				break;
-			default:
-				die("Unimplemented fmt s at 0x%X\n", pc-4);
+	} else switch (inst.funct){
+		case 0b000000: // add.d
+			setd_reg(inst.d,
+			         builder.CreateFAdd(getd_reg(inst.s), getd_reg(inst.t)));
+			break;
+		case 0b000001: // sub.d
+			setd_reg(inst.d,
+			         builder.CreateFSub(getd_reg(inst.s), getd_reg(inst.t)));
+			break;
+		case 0b000010: // mul.d
+			setd_reg(inst.d,
+			         builder.CreateFMul(getd_reg(inst.s), getd_reg(inst.t)));
+			break;
+		case 0b000011: // div.d
+			setd_reg(inst.d,
+			         builder.CreateFDiv(getd_reg(inst.s), getd_reg(inst.t)));
+			break;
+		case 0b001101: // trunc.w.d
+			// Convert double to u32, then use `as_float` to use `sets_reg`
+			sets_reg(inst.d,
+			         as_float(builder.CreateFPToUI(getd_reg(inst.s), int32_ty)));
+			break;
+		case 0b010011:{ // movn.s
+			// Hope this shit gets optimized
+			llvm::Value* cmp = builder.CreateICmpNE(
+				get_reg(inst.t),
+				builder.getInt32(0)
+			);
+			setd_reg(inst.d, builder.CreateSelect(
+				cmp,
+				getd_reg(inst.s),
+				getd_reg(inst.d)
+			));
+			break;
 		}
-		setd_reg(inst.d, value);
+		case 0b100000: // cvt.s.d
+			sets_reg(inst.d, builder.CreateFPTrunc(getd_reg(inst.s), float_ty));
+			break;
+		default:
+			die("Unimplemented fmt s at 0x%X\n", pc-4);
 	}
 	return false;
 }
 
 bool Jitter::inst_fmt_w(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	if ((inst.funct & 0b110000) == 0b110000){
+		// C.cond.w doesn't exist
+		die("NANI fmt w\n");
+	} else switch (inst.funct){
+		case 0b100000: // cvt.s.w
+			// There's an u32 in FPR s, and we must convert it to float
+			sets_reg(inst.d, 
+			         builder.CreateUIToFP(as_u32(gets_reg(inst.s)), float_ty));
+			break;
+		case 0b100001: // cvt.d.w
+			// There's an u32 in FPR s, and we must convert it to double
+			setd_reg(inst.d, 
+			         builder.CreateUIToFP(as_u32(gets_reg(inst.s)), double_ty));
+			break;
+		default:
+			die("Unimplemented fmt w at 0x%X: %d\n", pc-4, inst.funct);
+	}
+	return false;
 }
 
 bool Jitter::inst_fmt_l(vaddr_t pc, uint32_t val){
@@ -1438,31 +1512,60 @@ bool Jitter::inst_fmt_ps(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_mfc1(vaddr_t pc, uint32_t val){
 	inst_F_t inst(val);
-	set_reg(inst.t, builder.CreateBitCast(gets_reg(inst.s), int32_ty));
+	// Get lower 32 bits of the 64bits fpu register
+	set_reg(inst.t, as_u32(gets_reg(inst.s)));
 	return false;
 }
 
 bool Jitter::inst_mfhc1(vaddr_t pc, uint32_t val){
 	inst_F_t inst(val);
-	set_reg(inst.t, builder.CreateBitCast(gets_reg(inst.s+1), int32_ty));
+	// Get upper 32 bits of the 64bits fpu register
+	set_reg(inst.t, as_u32(gets_reg(inst.s+1)));
 	return false;
 }
 
 bool Jitter::inst_mtc1(vaddr_t pc, uint32_t val){
 	inst_F_t inst(val);
-	sets_reg(inst.s, builder.CreateBitCast(get_reg(inst.t), float_ty));
+	sets_reg(inst.s, as_float(get_reg(inst.t)));
 	return false;
 }
 
 bool Jitter::inst_mthc1(vaddr_t pc, uint32_t val){
 	inst_F_t inst(val);
-	sets_reg(inst.s+1, builder.CreateBitCast(get_reg(inst.t), float_ty));
+	sets_reg(inst.s+1, as_float(get_reg(inst.t)));
 	return false;
 }
 
 bool Jitter::inst_c_cond_s(vaddr_t pc, uint32_t val){
-	printf("unimplemented %s at 0x%X\n", __func__, pc-4);
-	exit(0);
+	inst_F_t inst(val);
+	uint8_t cond = inst.funct & 0b001111;
+	uint8_t cc   = (inst.d >> 2) & 0b111;
+	llvm::Value* val1 = gets_reg(inst.s);
+	llvm::Value* val2 = gets_reg(inst.t);
+	
+	// LLVM IR has the 'fcmp' instruction which performs exactly what we want.
+	// God bless LLVM
+	switch (cond){
+		case 0b0001: // un
+			set_cc(cc, builder.CreateFCmpUNO(val1, val2));
+			break;
+		case 0b0010: // eq
+			set_cc(cc, builder.CreateFCmpOEQ(val1, val2));
+			break;
+		case 0b0111: // ule
+			set_cc(cc, builder.CreateFCmpULE(val1, val2));
+			break;
+		case 0b1100: // lt
+			set_cc(cc, builder.CreateFCmpOLT(val1, val2));
+			break;
+		case 0b1110: // le
+			set_cc(cc, builder.CreateFCmpOLE(val1, val2));
+			break;
+		default:
+			die("Unimplemented c.cond.d at 0x%X: %X\n", pc-4, val);
+	}
+
+	return false;
 }
 
 bool Jitter::inst_c_cond_d(vaddr_t pc, uint32_t val){
@@ -1478,8 +1581,17 @@ bool Jitter::inst_c_cond_d(vaddr_t pc, uint32_t val){
 		case 0b0001: // un
 			set_cc(cc, builder.CreateFCmpUNO(val1, val2));
 			break;
+		case 0b0010: // eq
+			set_cc(cc, builder.CreateFCmpOEQ(val1, val2));
+			break;
 		case 0b0111: // ule
 			set_cc(cc, builder.CreateFCmpULE(val1, val2));
+			break;
+		case 0b1100: // lt
+			set_cc(cc, builder.CreateFCmpOLT(val1, val2));
+			break;
+		case 0b1110: // le
+			set_cc(cc, builder.CreateFCmpOLE(val1, val2));
 			break;
 		default:
 			die("Unimplemented c.cond.d at 0x%X: %X\n", pc-4, val);

@@ -18,18 +18,6 @@ enum Reg {
 
 namespace JIT {
 
-// Struct that will be accessed by the jitted code to modify the VM
-struct VmState {
-	uint32_t* regs;
-	uint8_t*  memory;
-	uint8_t*  perms;
-	vaddr_t*  dirty_vec;
-	vsize_t*  p_dirty_size;
-	uint8_t*  dirty_map;
-	float*    fpregs;
-	uint8_t*  ccs;
-};
-
 // Struct that will be modified by the jitted code when returning to notify
 // exit information
 struct ExitInfo {
@@ -50,12 +38,24 @@ struct ExitInfo {
 	friend std::ostream& operator<<(std::ostream& os, const ExitInfo& exit_inf);
 };
 
+// Struct that will be accessed by the jitted code to modify the VM
+struct VmState {
+	uint32_t* regs;
+	uint8_t*  memory;
+	uint8_t*  perms;
+	vaddr_t*  dirty_vec;
+	vsize_t*  p_dirty_size;
+	uint8_t*  dirty_map;
+	float*    fpregs;
+	uint8_t*  ccs;
+};
+
 // JIT block: signature of the function returned by Jitter
 typedef uint32_t (*jit_block_t)(
 	VmState*  p_vm_state,
 	ExitInfo* p_exit_info,
-	uint8_t*   cov_map,
-	uint32_t   regs_dump[][35]
+	uint8_t*  cov_map,
+	uint32_t  regs_dump[][35]
 );
 
 // Type used for storing already compiled JIT blocks.
@@ -63,22 +63,23 @@ typedef uint32_t (*jit_block_t)(
 // as fast as we can, but memory cost increases. Also, vector is thread-safe
 // as size is not being changed
 typedef std::vector<jit_block_t> jit_cache_t;
+//typedef std::unordered_map<vaddr_t, jit_block_t> jit_cache_t;
 
 
 class Jitter {
 public:
-	// LLVM doesn't seem to be thread-safe. Jitter locks this so there's only
-	// one thread jitting at a time
-	static std::mutex mutex;
-
-	// Jitter instruction handler
-	typedef bool (Jitter::*const inst_handler_t)(vaddr_t, uint32_t);
-	
 	Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	       const Breakpoints& breakpoints);
 	jit_block_t get_result();
 
 private:
+	// Jitter instruction handler
+	typedef bool (Jitter::*const inst_handler_t)(vaddr_t, uint32_t);
+
+	// LLVM doesn't seem to be thread-safe. Jitter locks this so there's only
+	// one thread jitting at a time
+	static std::mutex mutex;
+
 	const Mmu& mmu;
 	size_t cov_map_size;
 	const Breakpoints& breakpoints;

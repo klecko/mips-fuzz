@@ -300,15 +300,18 @@ vsize_t Mmu::get_alloc_size(vaddr_t addr){
 }
 
 vaddr_t Mmu::alloc(vsize_t size){
-	assert(size > 0);
+	// Fast path for empty allocations
+	if (size == 0)
+		return 0;
 
 	// Check out of memory and overflow
 	if (next_alloc + size > stack){
-		dbgprintf("Out of memory allocating 0x%X bytes\n", size);
+		//printf("Out of memory allocating 0x%X bytes\n", size);
+		throw RunOOM();
 		return 0;
 	}
 	if (next_alloc + size < next_alloc){
-		dbgprintf("Overflow allocating 0x%X bytes\n", size);
+		printf("Overflow allocating 0x%X bytes\n", size);
 		return 0;
 	}
 
@@ -332,6 +335,10 @@ vaddr_t Mmu::alloc(vsize_t size){
 }
 
 void Mmu::free(vaddr_t addr){
+	// Fast path for null address
+	if (addr == 0)
+		return;
+
 	Allocation& allocation = cur_allocs[addr];
 	switch (allocation.state){
 		case AllocState::Allocated:

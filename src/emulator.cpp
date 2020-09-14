@@ -3,6 +3,8 @@
 #include <unistd.h> // *_FILENO definitions
 #include <linux/limits.h> // PATH_MAX
 #include <string>
+#include <fstream>
+#include <sstream>
 #include "common.h"
 #include "emulator.h"
 #include "elf_parser.hpp"
@@ -241,6 +243,7 @@ void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
 	*/
 	// That's very bad for perf. Instead, just use hash-based coverage ids here.
 	// We use the interpreter only for crash reporting anyways
+	assert(__builtin_popcount(cov.size()) == 1);
 	uint32_t cov_id = branch_hash(from, to) & (cov.size()-1);
 
 	// Mark branch as seen
@@ -362,10 +365,10 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 	while (running){
 		// Get the JIT block and run it
 		cycles = rdtsc2(); // jit_cache_cycles
-		jit_block = jit_cache[pc];
+		jit_block = jit_cache[pc/4];
 		if (!jit_block){
 			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints).get_result();
-			jit_cache[pc] = jit_block;
+			jit_cache[pc/4] = jit_block;
 		}
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
@@ -450,8 +453,26 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 	}
 }
 
+void Emulator::run_file(const std::string& filepath){
+	cout << "Running file " << filepath << endl;
+	ifstream ifs(filepath);
+	ostringstream ss;
+	ss << ifs.rdbuf();
+
+	cov_t dummy1(1);
+	Stats dummy2;
+
+	try {
+		run_interpreter(ss.str(), dummy1, dummy2);
+	} catch (const Fault& f){
+		cout << "[PC: 0x" << hex << pc << "] " << f << endl;
+	} catch (const RunTimeout& t){
+		cout << "TIMEOUT" << endl;
+	}
+}
+
 uint64_t Emulator::run_until(vaddr_t pc){
-	cov_t dummy1(256*1024);
+	cov_t dummy1(1);
 	Stats dummy3;
 	running = true;
 	while (this->pc != pc && running){
@@ -476,7 +497,7 @@ void Emulator::test_bp(){
 void Emulator::malloc_bp(){
 	vsize_t size  = regs[Reg::a0];
 	dbgprintf("malloc(%u)", size);
-	vaddr_t addr  = (size > 0 ? mmu.alloc(size) : 0);
+	vaddr_t addr  = mmu.alloc(size);
 	regs[Reg::v0] = addr;
 	prev_pc       = pc;
 	pc            = regs[Reg::ra];
@@ -487,8 +508,7 @@ void Emulator::free_bp(){
 	//die("free_bp\n");
 	vsize_t addr = regs[Reg::a0];
 	dbgprintf("free(0x%X)\n", addr);
-	if (addr != 0)
-		mmu.free(addr);
+	mmu.free(addr);
 	prev_pc      = pc;
 	pc           = regs[Reg::ra];
 }
@@ -496,13 +516,9 @@ void Emulator::free_bp(){
 void Emulator::realloc_bp(){
 	vaddr_t addr = regs[Reg::a0];
 	vsize_t size = regs[Reg::a1];
-	dbgprintf("called from 0x%X\n", prev_pc);
 	dbgprintf("realloc(0x%X, %u)", addr, size);
-	vaddr_t new_addr = 0;
-	if (size > 0){
-		new_addr = mmu.alloc(size);
-	}
-	if (addr != 0){
+	vaddr_t new_addr = mmu.alloc(size);
+	if (addr){
 		mmu.copy_mem(new_addr, addr, min(size, mmu.get_alloc_size(addr)));
 		mmu.free(addr);
 	}
@@ -528,18 +544,21 @@ void Emulator::calloc_bp(){
 	// Compute size and check for overflow
 	vsize_t nmemb    = regs[Reg::a0];
 	vsize_t size     = regs[Reg::a1];
+	dbgprintf("calloc(%u, %u)", nmemb, size);
+
 	vsize_t alloc_sz = nmemb * size;
 	if (nmemb != 0 && alloc_sz/nmemb != size)
 		die("calloc integer overflow\n");
 
 	// Perform allocation and set memory to zero
-	vaddr_t addr = (alloc_sz > 0 ? mmu.alloc(alloc_sz) : 0);
-	mmu.set_mem(addr, 0, alloc_sz);
+	vaddr_t addr = mmu.alloc(alloc_sz);
+	if (addr)
+		mmu.set_mem(addr, 0, alloc_sz);
 
 	regs[Reg::v0] = addr;
 	prev_pc = pc;
 	pc      = regs[Reg::ra];
-	dbgprintf("calloc(%u, %u) --> 0x%X\n", nmemb, size, addr);
+	dbgprintf(" --> 0x%X\n", addr);
 }
 
 void Emulator::memcpy_bp(){

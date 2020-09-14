@@ -61,8 +61,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 
 	static jit_init init; // thread_local?
 
-	if (__builtin_popcount(cov_map_size) != 1)
-		die("Coverage map size must be power of 2\n");
+	assert(__builtin_popcount(cov_map_size) == 1);
 
 	// Get function name
 	ostringstream oss;
