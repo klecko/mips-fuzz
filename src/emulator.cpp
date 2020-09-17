@@ -15,6 +15,11 @@
 
 using namespace std;
 
+#define guestprintf(...) do { \
+	if (options.guest_output) \
+		printf(__VA_ARGS__);  \
+} while (0)
+
 inline uint32_t branch_hash(vaddr_t from, vaddr_t to){
 	return (from ^ (to + (from << 6) + (from >> 2)));
 }
@@ -241,7 +246,10 @@ void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
 		run_interpreter(input, cov, local_stats);
 }
 
-void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
+void Emulator::add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
+	if (!options.coverage)
+		return;
+
 	// Unlike in the JIT, it isn't worth having unique coverage ids here.
 	// We would need to store them in a data structure, and check it every time
 	// we want to add coverage at runtime:
@@ -266,20 +274,21 @@ void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
 	//check_repeated_cov_id(cov_id, from, to);
 }
 
-void Emulator::run_inst(cov_t& cov, Stats& local_stats, bool record_cov){
+void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	// Handle breakpoint. Record coverage if it changed pc, same as we do in
 	// branches
-	cycle_t cycles = rdtsc2();
+	cycle_t cycles = rdtsc2(); // bp_cycles
 	bp_handler_t bp = breakpoints.get_bp(pc);
 	if (bp){
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
 		(this->*bp)();
 		if (pc != pc_bf_bp)    // pc changed
-			if (record_cov) add_coverage(cov, pc_bf_bp, pc);
+			add_coverage(cov, pc_bf_bp, pc);
 	}
 	local_stats.bp_cycles += rdtsc2() - cycles;
 
-	dump(cout, options.dump_pc, options.dump_regs);
+	if (options.dump_pc || options.dump_regs)
+		dump(cout, options.dump_pc, options.dump_regs);
 
 	// Fetch current instruction
 	cycles = rdtsc2();
@@ -299,7 +308,7 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats, bool record_cov){
 
 	// No matter if the branch was taken or not, record coverage
 	if (rec_cov){
-		if (record_cov) add_coverage(cov, prev_pc, pc);
+		add_coverage(cov, prev_pc, pc);
 		rec_cov = false;
 	}
 	local_stats.jump_cycles += rdtsc2() - cycles;
@@ -324,8 +333,6 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 	running = true;
 	cycle_t cycles = rdtsc1(); // run_cycles
 	while (running){
-		if (false)
-			cout << *this;
 		run_inst(cov, local_stats);
 		local_stats.instr += 1;
 
@@ -385,7 +392,9 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 	};
 	JIT::ExitInfo exit_inf;
 	uint8_t*  cov_map = cov.data();
-	uint32_t  regs_state[20000][35];
+	uint32_t  regs_state_sz =
+		(options.dump_pc || options.dump_regs ? options.max_dump : 1);
+	uint32_t  regs_state[regs_state_sz][35];
 	uint32_t  ret;
 
 	// Number of instructions executed in current run
@@ -399,21 +408,24 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 		cycles = rdtsc2(); // jit_cache_cycles
 		jit_block = jit_cache[pc/4];
 		if (!jit_block){
-			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints, options)
-				.get_result();
+			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints, options, {
+				{"handle_syscall", (void*)&Emulator::handle_syscall},
+				{"handle_rdhwr",   (void*)&Emulator::handle_rdhwr},
+			}).get_result();
 			jit_cache[pc/4] = jit_block;
 		}
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
-		//cycles = rdtsc1(); // run_cycles
-		ret    = jit_block(&state, &exit_inf, cov_map, regs_state);
+		cycles = rdtsc1(); // run_cycles
+		ret    = jit_block(&state, &exit_inf, cov_map, this, regs_state);
 		local_stats.instr += ret;
 		instr_exec        += ret;
-		//local_stats.run_cycles += rdtsc1() - cycles;
+		local_stats.run_cycles += rdtsc1() - cycles;
 
 		// Handle the vm exit
 		cycles = rdtsc2(); // vm_exit_cycles
 		switch (exit_inf.reason){
+			case JIT::ExitInfo::ExitReason::RunFinished:
 			case JIT::ExitInfo::ExitReason::IndirectBranch:
 			case JIT::ExitInfo::ExitReason::Call:
 				// Just continue compilation
@@ -499,17 +511,26 @@ void Emulator::run_file(const std::string& filepath){
 }
 
 uint64_t Emulator::run_until(vaddr_t pc){
-	cov_t dummy1(1);
-	Stats dummy3;
+	cov_t dummy1;
+	Stats dummy2;
+
+	// Disable coverage
+	bool prev_cov = options.coverage;
+	options.coverage = false;
+
+	// Run until given pc, or until execution finished
 	running = true;
 	while (this->pc != pc && running){
-		run_inst(dummy1, dummy3, false);
-		dummy3.instr++;
+		run_inst(dummy1, dummy2);
+		dummy2.instr++;
 	}
 	if (!running)
 		die("Program finished running while trying to run until 0x%X\n", pc);
 	running = false;
-	return dummy3.instr;
+
+	// Restore coverage and return number of instructions executed
+	options.coverage = prev_cov;
+	return dummy2.instr;
 }
 
 vaddr_t Emulator::resolve_symbol(const std::string& symbol){
@@ -923,13 +944,14 @@ uint32_t Emulator::sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& er
 	return -1;
 }
 
-void Emulator::handle_syscall(uint32_t syscall){
+bool Emulator::handle_syscall(uint32_t syscall){
 	dbgprintf("syscall %u\n", syscall);
 	switch (syscall){
 		case 4001: // exit
 		case 4246: // exit_group
 			dbgprintf("EXIT %d\n", regs[Reg::a0]);
 			running = false;
+			return true;
 			break;
 
 		case 4003: // read
@@ -1054,6 +1076,7 @@ void Emulator::handle_syscall(uint32_t syscall){
 		default:
 			die("Unimplemented syscall at 0x%X: %d\n", prev_pc, syscall);
 	}
+	return false;
 }
 
 void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
@@ -1087,6 +1110,7 @@ void Emulator::dump(ostream& os, bool dump_pc, bool dump_regs) const {
 		os << "$hi: " << setw(8) << hi << "\t$lo: " << setw(8) << lo << endl;
 		os << endl;
 	}
+	os << dec;
 }
 
 ostream& operator<<(ostream& os, const Emulator& emu){

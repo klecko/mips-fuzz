@@ -12,7 +12,7 @@ using namespace std;
 /* TODO
 Adapt the elf parser to my code
 */
-
+#define SINGLE_RUN 0
 
 void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
@@ -120,6 +120,9 @@ void worker(int id, const Emulator& parent, Corpus& corpus, Stats& stats){
 
 		// Update global stats
 		stats.update(local_stats);
+
+		/* if (stats.cases >= 100000)
+			exit(0); */
 	}
 }
 
@@ -135,7 +138,8 @@ void create_folder(const char* name){
 }
 
 int main(){
-	const int num_threads = (DEBUG ? 1 : thread::hardware_concurrency());
+	const int num_threads =
+		(DEBUG|SINGLE_RUN ? 1 : thread::hardware_concurrency());
 	cout << "Threads: " << num_threads << endl;
 
 	setvbuf(stdout, NULL, _IONBF, 0);
@@ -149,13 +153,17 @@ int main(){
 	Stats stats;
 	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(
-		128 * 1024 * 1024,                    // memory
-		"../test_bins/stegdetect/stegdetect", // path to elf
-		{"stectdetect", "input_file"}         // argv
+		8 * 1024 * 1024,                // memory
+		"../test_bins/readelf",         // path to elf
+		{"readelf", "-e", "input_file"} // argv
 	);
 
 	JIT::jit_cache_t jit_cache(emu.memsize()/4);
+	//jit_cache.set_empty_key(0);
 	emu.enable_jit(&jit_cache);
+
+	emu.options.guest_output = false;
+	emu.options.coverage     = true;
 
 	// Run until open before forking
 	// test:       0x00423e8c | 0x41d6e4 | 0x00423e7c
@@ -163,7 +171,7 @@ int main(){
 	// readelf:    0x004c081c
 	// stegdetect: 0x0045d40c
 	try {
-		uint64_t insts = emu.run_until(0x0045d40c);
+		uint64_t insts = emu.run_until(0x004c081c);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault running before forking" << endl;

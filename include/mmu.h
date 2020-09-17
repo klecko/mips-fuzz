@@ -69,7 +69,7 @@ public:
 
 	// Read `len` bytes from virtual addr `src` into `dst`.
 	// Checks bounds and perms
-	void read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit=true) const;
+	void read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit=false) const;
 
 	// Write `len` bytes from `src` into virtual addr `dst`.
 	// Checks bounds and perms
@@ -162,6 +162,9 @@ private:
 
 	// Sets region from `addr` to `addr+len` as dirty
 	void set_dirty(vaddr_t addr, vsize_t len);
+
+	// Sets region from `addr` to `addr+len` as initialized
+	void set_init(vaddr_t addr, vsize_t len);
 
 	// Set permissions `perm` from `addr` to `addr+len`
 	// Updates dirty

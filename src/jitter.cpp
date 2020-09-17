@@ -5,7 +5,6 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/LinkAllPasses.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -50,11 +49,13 @@ struct jit_init {
 };
 
 Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
-               const Breakpoints& breakpoints, const EmuOptions& options):
+               const Breakpoints& breakpoints, const vector<linkage_t>& linkages,
+			   const EmuOptions& options):
 	mmu(mmu), cov_map_size(cov_map_size), breakpoints(breakpoints),
-	options(options), p_context(new llvm::LLVMContext),
+	linkages(linkages), options(options), p_context(new llvm::LLVMContext),
 	p_module(new llvm::Module("module", *p_context)),
-	context(*p_context), module(*p_module), builder(context)
+	context(*p_context), module(*p_module), builder(context),
+	must_be_loaded{false}, must_be_saved{false}
 {
 	// Lock global jitter mutex
 	std::lock_guard<std::mutex> lock(mutex);
@@ -125,6 +126,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 			p_vm_state_ty,  // p_vm_state
 			p_exit_info_ty, // p_exit_info
 			int8ptr_ty,     // cov_map
+			int8ptr_ty,     // p_emu
 			int32ptr_ty,    // regs_dump
 		},
 		false               // varargs
@@ -157,6 +159,12 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 		get_state_field(7, "p_ccs"),
 	};
 
+	if (TMP_REGS){
+		// Allocate stack for each reg
+		for (int i = 0; i < 34; i++)
+			p_regs[i] = builder.CreateAlloca(int32_ty);
+	}
+
 	// Create fault path. Whenever a fault occurs, this fast vm exit will be
 	// taken and we'll run the interpreter to get more details about the fault.
 	// This is much better than generating code for every possible fault in
@@ -164,10 +172,22 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	fault_path = llvm::BasicBlock::Create(context, "fault_path", function);
 	builder.SetInsertPoint(fault_path);
 	vm_exit(ExitInfo::ExitReason::Fault, builder.getInt32(0));
+
+	if (INTEGRATED_CALLS){
+		end_path = llvm::BasicBlock::Create(context, "end_path", function);
+		builder.SetInsertPoint(end_path);
+		vm_exit(ExitInfo::ExitReason::RunFinished);
+	}
+
 	builder.SetInsertPoint(entry_block);
 
 	// Create basic blocks recursively
 	llvm::BasicBlock* bb = create_block(pc);
+
+	if (TMP_REGS){
+		// Load each necessary register
+		load_regs();
+	}
 
 	// Jump from entry to `bb`. LLVM doesn't allow jumping to the first basic
 	// block of a function. This way `bb` is the second basic block and we can
@@ -175,12 +195,18 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	builder.CreateBr(bb);
 
 	// JIT module
-	if (llvm::verifyModule(module, &llvm::errs())){
+	if (llvm::verifyModule(module)){
 		llvm::outs() << module;
 		llvm::verifyModule(module, &llvm::errs());
 		die("bad module\n");
 	}
 	compile();
+}
+
+void Jitter::link_stuff(llvm::ExecutionEngine* ee){
+	for (const linkage_t& linkage : linkages){
+		ee->addGlobalMapping(linkage.name, (uint64_t)linkage.func);
+	}
 }
 
 bool Jitter::load_from_disk(const string& name){
@@ -214,6 +240,7 @@ bool Jitter::load_from_disk(const string& name){
 		.setEngineKind(llvm::EngineKind::JIT)
 		.create();
 	ee->addObjectFile(move(obj.get()));
+	link_stuff(ee);
 	result = (jit_block_t)ee->getFunctionAddress(name);
 	if (result == NULL){
 		cout << "Error getting function address for cache " << name << endl;
@@ -247,9 +274,9 @@ void Jitter::compile(){
 		llvm::None,                           // no idea
 		llvm::CodeGenOpt::Default,            // codegen optimization
 		true                                  // JIT
-		// It took me two whole days to figure out why relocation types when
-		// emiting object files to the disk cache were wrong. JIT is false
-		// for default. Beware, kids.
+		// It took me two whole days to figure out why relocation types
+		// were wrong when emiting object files to the disk cache were wrong.
+		// JIT is false by default. Beware, kids.
 	);
 
 	// Optimize IR
@@ -274,6 +301,7 @@ void Jitter::compile(){
 	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module))
 		.setEngineKind(llvm::EngineKind::JIT)
 		.create(machine);
+	link_stuff(ee);
 	result = (jit_block_t)ee->getFunctionAddress(function->getName());
 
 	// Dump to disk
@@ -313,11 +341,16 @@ llvm::Value* Jitter::get_state_field(uint8_t field, const string& name){
 llvm::Value* Jitter::get_preg(uint8_t reg){
 	// Get pointer to regs[reg]
 	assert(1 <= reg && reg <= 33); // 0 is reg zero
-	llvm::Value* p_reg = builder.CreateInBoundsGEP(
-		state.p_regs,
-		builder.getInt32(reg),
-		"p_reg" + to_string(reg) + "_"
-	);
+	llvm::Value* p_reg;
+	if (TMP_REGS){
+		p_reg = p_regs[reg];
+	} else {
+		p_reg = builder.CreateInBoundsGEP(
+			state.p_regs,
+			builder.getInt32(reg),
+			"p_reg" + to_string(reg) + "_"
+		);
+	}
 	return p_reg;
 }
 
@@ -346,6 +379,7 @@ llvm::Value* Jitter::get_reg(uint8_t reg){
 	else {
 		llvm::Value* p_reg = get_preg(reg);
 		reg_val = builder.CreateLoad(p_reg, "reg" + to_string(reg) + "_");
+		must_be_loaded[reg] = true;
 	}
 	return reg_val;
 }
@@ -357,6 +391,7 @@ void Jitter::set_reg(uint8_t reg, llvm::Value* val){
 	if (reg != 0){
 		llvm::Value* p_reg = get_preg(reg);
 		builder.CreateStore(val_zext, p_reg);
+		must_be_saved[reg] = true;
 	}
 }
 
@@ -480,6 +515,9 @@ void Jitter::vm_exit(ExitInfo::ExitReason reason, llvm::Value* reenter_pc,
 		);
 		builder.CreateStore(info2, p_info2);
 	}
+
+	if (TMP_REGS)
+		save_regs();
 
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
@@ -762,6 +800,36 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len){
 	llvm::Value* p_value_cast = builder.CreateBitCast(p_value, cast_type_p);
 	llvm::Value* value_cast   = builder.CreateTrunc(value, cast_type_v);
 	builder.CreateStore(value_cast, p_value_cast);
+}
+
+void Jitter::load_reg(uint8_t reg){
+	llvm::Value* p_reg = builder.CreateInBoundsGEP(
+		state.p_regs,
+		builder.getInt32(reg)
+	);
+	builder.CreateStore(builder.CreateLoad(p_reg), p_regs[reg]);
+}
+
+void Jitter::save_reg(uint8_t reg){
+	llvm::Value* p_reg = builder.CreateInBoundsGEP(
+		state.p_regs,
+		builder.getInt32(reg)
+	);
+	builder.CreateStore(builder.CreateLoad(p_regs[reg]), p_reg);
+}
+
+void Jitter::load_regs(){
+	for (int i = 0; i < 34; i++){
+		if (must_be_loaded[i])
+			load_reg(i);
+	}
+}
+
+void Jitter::save_regs(){
+	for (int i = 0; i < 34; i++){
+		if (must_be_saved[i])
+			save_reg(i);
+	}
 }
 
 llvm::BasicBlock* Jitter::create_block(vaddr_t pc){

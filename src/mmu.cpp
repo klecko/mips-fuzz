@@ -162,6 +162,12 @@ void Mmu::set_dirty(vaddr_t addr, vsize_t len){
 	}
 }
 
+void Mmu::set_init(vaddr_t addr, vsize_t len){
+	vaddr_t addr_end = addr + len;
+	for (vaddr_t v = addr; v < addr_end; v++)
+		perms[v] |= PERM_INIT;
+}
+
 void Mmu::set_perms(vaddr_t addr, vsize_t len, uint8_t perm){
 	// Set permissions
 	memset(perms+addr, perm, len);
@@ -223,8 +229,7 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	check_perms(dst, len, PERM_WRITE);
 
 	// Memory has been initialized, update perms
-	for (vaddr_t addr = dst; addr < dst+len; addr++)
-		perms[addr] |= PERM_INIT;
+	set_init(dst, len);
 
 	// Update dirty blocks
 	set_dirty(dst, len);
@@ -243,8 +248,7 @@ void Mmu::copy_mem(vaddr_t dst, vaddr_t src, vsize_t len){
 	check_perms (dst, len, PERM_WRITE);
 
 	// Memory has been initialized, update perms
-	for (vaddr_t addr = dst; addr < dst+len; addr++)
-		perms[addr] |= PERM_INIT;
+	set_init(dst, len);
 
 	// Update dirty blocks
 	set_dirty(dst, len);
@@ -261,8 +265,7 @@ void Mmu::set_mem(vaddr_t dst, uint8_t c, vsize_t len){
 	check_perms(dst, len, PERM_WRITE);
 
 	// Memory has been initialized, update perms
-	for (vaddr_t addr = dst; addr < dst+len; addr++)
-		perms[addr] |= PERM_INIT;
+	set_init(dst, len);
 
 	// Update dirty blocks
 	set_dirty(dst, len);

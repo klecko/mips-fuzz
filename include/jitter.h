@@ -4,9 +4,13 @@
 #include <unordered_map>
 #include <mutex>
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "common.h"
 #include "mmu.h"
 #include "breakpoints.h"
+
+#define TMP_REGS 0
+#define INTEGRATED_CALLS 0
 
 enum Reg {
 	zero, at, v0, v1, a0, a1, a2, a3,
@@ -17,12 +21,19 @@ enum Reg {
 };
 
 struct EmuOptions {
-	bool     dump_pc   = false;
-	bool     dump_regs = false;
-	uint32_t max_dump  = 20000;
+	bool     guest_output = false;
+	bool     coverage     = true;
+	bool     dump_pc      = false;
+	bool     dump_regs    = false;
+	uint32_t max_dump     = 20000;
 };
 
 namespace JIT {
+
+struct linkage_t {
+	std::string name;
+	void*       func;
+};
 
 // Struct that will be modified by the jitted code when returning to notify
 // exit information
@@ -36,6 +47,7 @@ struct ExitInfo {
 		Exception, // trap or break
 		Breakpoint,
 		CheckRepCovId, // debugging coverage ids
+		RunFinished,
 	};
 	ExitReason reason;
 	vaddr_t    reenter_pc;
@@ -61,6 +73,7 @@ typedef uint32_t (*jit_block_t)(
 	VmState*  p_vm_state,
 	ExitInfo* p_exit_info,
 	uint8_t*  cov_map,
+	const Emulator* p_emu,
 	uint32_t  regs_dump[][35]
 );
 
@@ -70,12 +83,16 @@ typedef uint32_t (*jit_block_t)(
 // as size is not being changed
 typedef std::vector<jit_block_t> jit_cache_t;
 //typedef std::unordered_map<vaddr_t, jit_block_t> jit_cache_t;
+//#include "sparsehash/dense_hash_map"
+//typedef google::dense_hash_map<vaddr_t, JIT::jit_block_t> jit_cache_t;
 
 
 class Jitter {
 public:
 	Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
-	       const Breakpoints& breakpoints, const EmuOptions& options);
+	       const Breakpoints& breakpoints,
+	       const std::vector<linkage_t>& linkages,
+		   const EmuOptions& options);
 	jit_block_t get_result();
 
 private:
@@ -89,6 +106,7 @@ private:
 	const Mmu& mmu;
 	size_t cov_map_size;
 	const Breakpoints& breakpoints;
+	std::vector<linkage_t> linkages;
 	const EmuOptions& options;
 
 	static uint32_t next_cov_id;
@@ -103,6 +121,7 @@ private:
 	llvm::Value*       p_instr;
 
 	llvm::BasicBlock*  fault_path;
+	llvm::BasicBlock*  end_path;
 
 	struct {
 		llvm::Value* p_regs;
@@ -114,6 +133,16 @@ private:
 		llvm::Value* p_fpregs;
 		llvm::Value* p_ccs;
 	} state;
+
+	llvm::Value* p_regs[34];
+	bool must_be_loaded[34];
+	bool must_be_saved[34];
+
+	void load_reg(uint8_t reg);
+	void save_reg(uint8_t reg);
+	void load_regs();
+	void save_regs();
+	void link_stuff(llvm::ExecutionEngine* ee);
 
 	// Map of created basic blocks. A basic block is not created if it
 	// is registered here. This way we avoid things like infinite recursion

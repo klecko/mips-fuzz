@@ -116,6 +116,7 @@ private:
 	// Breakpoints, indexed by address
 	Breakpoints breakpoints;
 
+	// Pointer to jit cache, if any
 	JIT::jit_cache_t* jit_cache;
 
 	// Load `elf` into memory, allocate stack and set up argv and company
@@ -167,12 +168,17 @@ private:
 	                   uint32_t& error);
 	uint32_t sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& error);
 
-	void handle_syscall(uint32_t syscall);
+	// Handle syscall and return if program has finished (sys_exit or similar)
+	bool handle_syscall(uint32_t syscall);
 
+	// Read hardware register `hwr` to GRP `reg`
 	void handle_rdhwr(uint8_t hwr, uint8_t reg);
 
+	// Mark branch (`from`, `to`) in `cov`
+	void add_coverage(cov_t& cov, vaddr_t from, vaddr_t to);
+
 	// Run a single instruction (interpreter)
-	void run_inst(cov_t& cov, Stats& local_stats, bool record_cov=true);
+	void run_inst(cov_t& cov, Stats& local_stats);
 
 	// Perform run with provided input using the interpreter
 	void run_interpreter(const std::string& input, cov_t& cov,

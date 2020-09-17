@@ -416,7 +416,7 @@ bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
@@ -497,7 +497,7 @@ bool Jitter::inst_jalr(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(builder.getInt32(pc), jump_addr);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			vm_exit(ExitInfo::ExitReason::CheckRepCovId, jump_addr,
@@ -523,7 +523,7 @@ bool Jitter::inst_beq(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
@@ -570,7 +570,7 @@ bool Jitter::inst_bne(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
@@ -600,7 +600,7 @@ bool Jitter::inst_jr(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(builder.getInt32(pc), jump_addr);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			vm_exit(ExitInfo::ExitReason::CheckRepCovId, jump_addr,
@@ -624,9 +624,47 @@ bool Jitter::inst_lhu(vaddr_t pc, uint32_t val){
 }
 
 bool Jitter::inst_syscall(vaddr_t pc, uint32_t val){
-	llvm::Value* reenter_pc = builder.getInt32(pc);
-	vm_exit(ExitInfo::ExitReason::Syscall, reenter_pc);
-	return true;
+	if (!INTEGRATED_CALLS){
+		// Generate vm exit and handle syscall from outside the VM
+		llvm::Value* reenter_pc = builder.getInt32(pc);
+		vm_exit(ExitInfo::ExitReason::Syscall, reenter_pc);
+		return true;
+	} else {
+		// Call handle_syscall from the JIT, no need to vm exit
+		if (TMP_REGS){
+			save_reg(Reg::a0);
+			save_reg(Reg::a1);
+			save_reg(Reg::a2);
+			save_reg(Reg::a3);
+			save_reg(Reg::sp);
+		}
+		llvm::Value* emu_ptr = &function->arg_begin()[3];
+		llvm::FunctionType* handle_syscall_ty = llvm::FunctionType::get(
+			int1_ty,
+			{
+				int8ptr_ty, // pointer to emulator
+				int32_ty,   // syscall number
+			},
+			false
+		);
+		llvm::FunctionCallee handle_syscall_func =
+			module.getOrInsertFunction("handle_syscall", handle_syscall_ty);
+
+		llvm::Value* exit =
+			builder.CreateCall(handle_syscall_func, {emu_ptr, get_reg(Reg::v0)});
+
+		llvm::Value* cmp = builder.CreateICmpEQ(exit, builder.getTrue());
+		llvm::BasicBlock* continue_path = 
+			llvm::BasicBlock::Create(context, "continue", function);
+		builder.Insert(llvm::BranchInst::Create(end_path, continue_path, cmp));
+
+		builder.SetInsertPoint(continue_path);
+		if (TMP_REGS){
+			load_reg(Reg::v0);
+			load_reg(Reg::a3);
+		}
+		return false;
+	}
 }
 
 bool Jitter::inst_xor(vaddr_t pc, uint32_t val){
@@ -747,7 +785,7 @@ bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
@@ -781,7 +819,7 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
@@ -806,14 +844,39 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_rdhwr(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	llvm::Value* reenter_pc = builder.getInt32(pc);
-	vm_exit(
-		ExitInfo::ExitReason::Rdhwr,
-		reenter_pc, 
-		builder.getInt32(inst.d), 
-		builder.getInt32(inst.t)
-	);
-	return true;
+	if (!INTEGRATED_CALLS){
+		// Generate vm exit and handle rdhwr from outside the VM
+		llvm::Value* reenter_pc = builder.getInt32(pc);
+		vm_exit(
+			ExitInfo::ExitReason::Rdhwr,
+			reenter_pc,
+			builder.getInt32(inst.d),
+			builder.getInt32(inst.t)
+		);
+		return true;
+	} else {
+		// Call handle_rdhwr from the JIT, no need to vm exit
+		llvm::Value* emu_ptr = &function->arg_begin()[3];
+		llvm::FunctionType* handle_rdhwr_ty = llvm::FunctionType::get(
+			void_ty,
+			{
+				int8ptr_ty, // pointer to emulator
+				int8_ty,    // hwr
+				int8_ty     // reg
+			},
+			false
+		);
+		llvm::FunctionCallee handle_rdhwr_func =
+			module.getOrInsertFunction("handle_rdhwr", handle_rdhwr_ty);
+		builder.CreateCall(handle_rdhwr_func, {
+			emu_ptr,
+			builder.getInt8(inst.d),
+			builder.getInt8(inst.t)
+		});
+		if (TMP_REGS)
+			load_reg(inst.t);
+		return false;
+	}
 }
 
 bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
@@ -828,7 +891,7 @@ bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
@@ -893,7 +956,7 @@ bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			vm_exit(ExitInfo::ExitReason::CheckRepCovId,
@@ -1169,7 +1232,7 @@ bool Jitter::inst_j(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			vm_exit(ExitInfo::ExitReason::CheckRepCovId,
@@ -1223,7 +1286,7 @@ bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
@@ -1612,7 +1675,7 @@ bool Jitter::inst_bc1(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (COVERAGE){
+	if (options.coverage){
 		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
 		if (DBG_CHECK_REPEATED_COV_ID){
 			llvm::Value* reenter_pc = builder.CreateSelect(
