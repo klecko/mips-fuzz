@@ -26,6 +26,15 @@ class Rng {
 			state ^= state >> 27;
 			return state * 2685821657736338717LL;
 		}
+		uint64_t rnd(uint64_t min, uint64_t max){
+			assert(max >= min);
+			return min + (rnd() % (max-min+1));
+		}
+		uint64_t rnd_exp(uint64_t min, uint64_t max){
+			//std::cout << max << " " << min << std::endl;
+			uint64_t x = rnd(min, max);
+			return rnd(min, x);
+		}
 };
 
 // Type used for storing unique crashes. May be changed by a hash table
@@ -34,7 +43,8 @@ typedef std::vector<std::pair<vaddr_t, Fault>> crashes_t;
 class Corpus {
 public:
 	static const int COVERAGE_MAP_SIZE = 64*1024;
-	static const int MUTATED_BYTES     = 64;
+	static const int MIN_MUTATIONS     = 1;
+	static const int MAX_MUTATIONS     = 5;
 
 	Corpus(int nthreads, const std::string& path);
 
@@ -72,11 +82,39 @@ private:
 	std::atomic<size_t> cov_n;
 	std::vector<std::atomic_flag> recorded_cov;
 
-	// Mutate input in `mutated_inputs[id]`
-	void mutate_input(int id, Rng& rng);
+	// Max input size, used in expand mutation
+	size_t max_input_size;
 
 	// Add input to corpus
 	void add_input(const std::string& new_input);
+
+	// Mutate input in `mutated_inputs[id]`
+	void mutate_input(int id, Rng& rng);
+
+	// Mutation strategies
+	typedef void (Corpus::*mutation_strat_t)(std::string& input, Rng& rng);
+	static const std::vector<mutation_strat_t> mut_strats;
+	void shrink(std::string& input, Rng& rng);
+	void expand(std::string& input, Rng& rng);
+	void bit(std::string& input, Rng& rng);
+	void dec_byte(std::string& input, Rng& rng);
+	void inc_byte(std::string& input, Rng& rng);
+	void neg_byte(std::string& input, Rng& rng);
+	void add_sub(std::string& input, Rng& rng);
+	void set(std::string& input, Rng& rng);
+	void swap(std::string& input, Rng& rng);
+	void copy(std::string& input, Rng& rng);
+	void inter_splice(std::string& input, Rng& rng);
+	void insert_rand(std::string& input, Rng& rng);
+	void overwrite_rand(std::string& input, Rng& rng);
+	void byte_repeat_overwrite(std::string& input, Rng& rng);
+	void byte_repeat_insert(std::string& input, Rng& rng);
+	void magic_overwrite(std::string& input, Rng& rng);
+	void magic_insert(std::string& input, Rng& rng);
+	void random_overwrite(std::string& input, Rng& rng);
+	void random_insert(std::string& input, Rng& rng);
+	void splice_overwrite(std::string& input, Rng& rng);
+	void splice_insert(std::string& input, Rng& rng);
 };
 
 #endif

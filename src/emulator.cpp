@@ -298,12 +298,12 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 
 	// If needed, take the branch
 	// Otherwise, just increment PC so it points to the next instruction
-	cycles  = rdtsc2();
+	cycles  = rdtsc2(); // jump_cycles
 	prev_pc = pc;
 	if (condition){
 		pc        = jump_addr;
 		condition = false;
-	} else 
+	} else
 		pc += 4;
 
 	// No matter if the branch was taken or not, record coverage
@@ -331,7 +331,6 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 	// Perform execution recording number of executed instructions
 	uint64_t instr_exec = 0;
 	running = true;
-	cycle_t cycles = rdtsc1(); // run_cycles
 	while (running){
 		run_inst(cov, local_stats);
 		local_stats.instr += 1;
@@ -340,7 +339,6 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 		if (instr_exec >= INSTR_TIMEOUT)
 			throw RunTimeout();
 	}
-	local_stats.run_cycles += rdtsc1() - cycles;
 }
 
 const char* regs_map[] = {
@@ -408,19 +406,19 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 		cycles = rdtsc2(); // jit_cache_cycles
 		jit_block = jit_cache[pc/4];
 		if (!jit_block){
-			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints, options, {
+			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints, {
 				{"handle_syscall", (void*)&Emulator::handle_syscall},
 				{"handle_rdhwr",   (void*)&Emulator::handle_rdhwr},
-			}).get_result();
+			}, options).get_result();
 			jit_cache[pc/4] = jit_block;
 		}
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
-		cycles = rdtsc1(); // run_cycles
+		cycles = rdtsc2(); // vm_cycles
 		ret    = jit_block(&state, &exit_inf, cov_map, this, regs_state);
 		local_stats.instr += ret;
 		instr_exec        += ret;
-		local_stats.run_cycles += rdtsc1() - cycles;
+		local_stats.vm_cycles += rdtsc2() - cycles;
 
 		// Handle the vm exit
 		cycles = rdtsc2(); // vm_exit_cycles

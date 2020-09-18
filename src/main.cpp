@@ -17,9 +17,9 @@ Adapt the elf parser to my code
 void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
 	uint32_t elapsed = 0;
-	double minstrps, fcps, reset_time, run_time, cov_time, inst_handl_time,
-	       fetch_inst_time, jump_time, bp_time, corpus_sz,
-	       jit_cache_time, vm_exit_time;
+	double minstrps, fcps, run_time, reset_time, cov_time, mut_time,
+	       inst_handl_time, fetch_inst_time, jump_time, bp_time, corpus_sz,
+	       jit_cache_time, vm_time, vm_exit_time;
 	uint64_t cases, uniq_crashes, crashes, timeouts, ooms, cov, corpus_n;
 	while (true){
 		this_thread::sleep_for(chrono::seconds(1));
@@ -34,14 +34,16 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		crashes         = stats.crashes;
 		timeouts        = stats.timeouts;
 		ooms            = stats.ooms;
-		reset_time      = (double)stats.reset_cycles / stats.total_cycles;
 		run_time        = (double)stats.run_cycles / stats.total_cycles;
+		reset_time      = (double)stats.reset_cycles / stats.total_cycles;
 		cov_time        = (double)stats.cov_cycles / stats.total_cycles;
+		mut_time        = (double)stats.mut_cycles / stats.total_cycles;
 		inst_handl_time = (double)stats.inst_handl_cycles / stats.total_cycles;
 		fetch_inst_time = (double)stats.fetch_inst_cycles / stats.total_cycles;
 		jump_time       = (double)stats.jump_cycles / stats.total_cycles;
 		bp_time         = (double)stats.bp_cycles / stats.total_cycles;
 		jit_cache_time  = (double)stats.jit_cache_cycles / stats.total_cycles;
+		vm_time         = (double)stats.vm_cycles / stats.total_cycles;
 		vm_exit_time    = (double)stats.vm_exit_cycles / stats.total_cycles;
 		printf("[%u secs] cases: %lu, minstrps: %.3f, fcps: %.3f, cov: %lu, "
 		       "corpus: %lu/%.3fKB, uniq crashes: %lu, crashes: %lu, "
@@ -50,14 +52,14 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		       uniq_crashes, crashes, timeouts, ooms);
 
 		if (TIMETRACE >= 1)
-			printf("\treset: %.3f, run: %.3f, cov: %.3f\n",
-			       reset_time, run_time, cov_time);
+			printf("\trun: %.3f, reset: %.3f, cov: %.3f, mut: %.3f\n",
+			       run_time, reset_time, cov_time, mut_time);
 
 		if (TIMETRACE >= 2)
 			printf("\tinst_handl: %.3f, fetch_inst: %.3f, jump: %.3f, bp: %.3f\n"
-			       "\tjit cache: %.3f, vm exit: %.3f\n",
+			       "\tjit cache: %.3f, vm: %.3f, vm exit: %.3f\n",
 			       inst_handl_time, fetch_inst_time, jump_time, bp_time,
-			       jit_cache_time, vm_exit_time);
+			       jit_cache_time, vm_time, vm_exit_time);
 	}
 }
 
@@ -83,13 +85,17 @@ void worker(int id, const Emulator& parent, Corpus& corpus, Stats& stats){
 		// Run some time saving stats in local_stats
 		while (_rdtsc() - cycles_init < 50000000){
 			// Get new mutated input
+			cycles = rdtsc1(); // mut_cycles
 			const string& input = corpus.get_new_input(id, rng);
+			local_stats.mut_cycles += rdtsc1() - cycles;
 
 			// Clear coverage
 			cycles = rdtsc1(); // cov_cycles1
 			cov.assign(Corpus::COVERAGE_MAP_SIZE, 0);
 			local_stats.cov_cycles += rdtsc1() - cycles;
 
+			// Run case
+			cycles = rdtsc1(); // run_cycles
 			try {
 				runner.run(input, cov, local_stats);
 			} catch (const Fault& f) {
@@ -102,13 +108,15 @@ void worker(int id, const Emulator& parent, Corpus& corpus, Stats& stats){
 			} catch (const RunOOM&) {
 				local_stats.ooms++;
 			}
-
 			local_stats.cases++;
+			local_stats.run_cycles += rdtsc1() - cycles;
 
+			// Report coverage
 			cycles = rdtsc1(); // cov_cycles2
 			corpus.report_cov(id, cov);
 			local_stats.cov_cycles += rdtsc1() - cycles;
 
+			// Reset emulator
 			cycles = rdtsc1(); // reset_cycles
 			runner.reset(parent);
 			local_stats.reset_cycles += rdtsc1() - cycles;
