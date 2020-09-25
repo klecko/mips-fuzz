@@ -212,6 +212,7 @@ void Emulator::set_bps(){
 	breakpoints.set_bp_sym("__calloc", &Emulator::calloc_bp, true);
 	breakpoints.set_bp_sym("memcpy", &Emulator::memcpy_bp, true);
 	breakpoints.set_bp_sym("memset", &Emulator::memset_bp, true);
+	//breakpoints.set_bp_addr("test", 0x413e04, &Emulator::test_bp, false);
 }
 
 void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
@@ -389,11 +390,11 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 		&ccs,
 	};
 	JIT::ExitInfo exit_inf;
-	uint8_t*  cov_map = cov.data();
-	uint32_t  regs_state_sz =
+	uint8_t* cov_map = cov.data();
+	uint32_t regs_state_sz =
 		(options.dump_pc || options.dump_regs ? options.max_dump : 1);
-	uint32_t  regs_state[regs_state_sz][35];
-	uint32_t  ret;
+	uint32_t regs_state[regs_state_sz][35];
+	uint32_t ret;
 
 	// Number of instructions executed in current run
 	uint64_t instr_exec = 0;
@@ -422,6 +423,7 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 
 		// Handle the vm exit
 		cycles = rdtsc2(); // vm_exit_cycles
+		//cout << exit_inf << endl;
 		switch (exit_inf.reason){
 			case JIT::ExitInfo::ExitReason::RunFinished:
 			case JIT::ExitInfo::ExitReason::IndirectBranch:
@@ -437,11 +439,11 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 				// accurate fault. I'm not sure if this is correct as state is
 				// not restored and some instructions are executed twice.
 				// THINK ABOUT THIS
-				throw Fault(Fault::Type::Unknown, -1);
+				//throw Fault(Fault::Type::Unknown, -1);
 
 				// We can't do this because it will record coverage with
 				// interpreter cov ids
-				//run_interpreter(input, cov, local_stats); // this will throw
+				run_interpreter(input, cov, local_stats); // this will throw
 				die("JIT said fault but interpreter didn't\n");
 			case JIT::ExitInfo::ExitReason::Exception:
 				die("Exception??\n");
@@ -792,6 +794,8 @@ uint32_t Emulator::sys_read(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
                              uint32_t& error)
 {
+	dbgprintf("write(%d, 0x%X, %d)\n", fd, buf_addr, count);
+
 	// Stdin, stdout and stderr
 	switch (fd){
 		case STDIN_FILENO:
@@ -808,7 +812,7 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 			return count;
 	}
 
-	die("write(%d, 0x%X, %d)\n", fd, buf_addr, count);
+	die("strange write\n");
 
 	// Check if file is open
 	if (!open_files.count(fd))
@@ -885,7 +889,7 @@ uint32_t Emulator::sys_close(uint32_t fd, uint32_t& error){
 	// Check if file is open
 	if (!open_files.count(fd))
 		die("closing not used fd %u\n", fd);
-	
+
 	open_files.erase(open_files.find(fd));
 
 end:
@@ -943,6 +947,7 @@ uint32_t Emulator::sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& er
 }
 
 bool Emulator::handle_syscall(uint32_t syscall){
+	//cout << *this << endl;
 	dbgprintf("syscall %u\n", syscall);
 	switch (syscall){
 		case 4001: // exit
@@ -960,7 +965,7 @@ bool Emulator::handle_syscall(uint32_t syscall){
 				regs[Reg::a3]
 			);
 			break;
-		
+
 		case 4004: // write
 			regs[Reg::v0] = sys_write(
 				regs[Reg::a0],

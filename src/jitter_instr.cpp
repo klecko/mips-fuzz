@@ -630,14 +630,8 @@ bool Jitter::inst_syscall(vaddr_t pc, uint32_t val){
 		vm_exit(ExitInfo::ExitReason::Syscall, reenter_pc);
 		return true;
 	} else {
-		// Call handle_syscall from the JIT, no need to vm exit
-		if (TMP_REGS){
-			save_reg(Reg::a0);
-			save_reg(Reg::a1);
-			save_reg(Reg::a2);
-			save_reg(Reg::a3);
-			save_reg(Reg::sp);
-		}
+		// Call handle_syscall from the JIT, no need to vm exit.
+		// If TMP_REGS, register saving is done at the end by gen_save_regs
 		llvm::Value* emu_ptr = &function->arg_begin()[3];
 		llvm::FunctionType* handle_syscall_ty = llvm::FunctionType::get(
 			int1_ty,
@@ -650,16 +644,18 @@ bool Jitter::inst_syscall(vaddr_t pc, uint32_t val){
 		llvm::FunctionCallee handle_syscall_func =
 			module.getOrInsertFunction("handle_syscall", handle_syscall_ty);
 
+		// Function handle_syscall returns whether we should exit or not
+		// Getting reg v0 should be free because most times it will be a
+		// constant
 		llvm::Value* exit =
 			builder.CreateCall(handle_syscall_func, {emu_ptr, get_reg(Reg::v0)});
-
-		llvm::Value* cmp = builder.CreateICmpEQ(exit, builder.getTrue());
-		llvm::BasicBlock* continue_path = 
+		llvm::BasicBlock* continue_path =
 			llvm::BasicBlock::Create(context, "continue", function);
-		builder.Insert(llvm::BranchInst::Create(end_path, continue_path, cmp));
+		builder.Insert(llvm::BranchInst::Create(end_path, continue_path, exit));
 
 		builder.SetInsertPoint(continue_path);
 		if (TMP_REGS){
+			// Load registers (unconditionally)
 			load_reg(Reg::v0);
 			load_reg(Reg::a3);
 		}

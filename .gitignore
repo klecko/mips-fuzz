@@ -2,3 +2,4 @@ build/
 *.o
 .vscode/
 .gdb_history
+include/sparsehash

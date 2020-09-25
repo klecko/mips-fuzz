@@ -86,7 +86,7 @@ const std::string& Corpus::get_new_input(int id, Rng& rng){
 	while (lock_corpus.test_and_set());
 	mutated_inputs[id] = corpus[rng.rnd() % corpus.size()];
 	lock_corpus.clear();
-	mutate_input(id, rng);
+	//mutate_input(id, rng);
 	return mutated_inputs[id];
 }
 

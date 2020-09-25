@@ -2,6 +2,7 @@
 #include <sstream>
 #include <fstream>
 #include <unistd.h>
+#include <unordered_set>
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -11,6 +12,9 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "jitter.h"
+
+#include <llvm/Transforms/IPO/PassManagerBuilder.h>
+#include "llvm/Analysis/TargetTransformInfo.h"
 
 // Attempt to give a unique coverage id to each branch.
 // When disabled, branch hashes are used as coverage ids, same as the
@@ -173,16 +177,19 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	builder.SetInsertPoint(fault_path);
 	vm_exit(ExitInfo::ExitReason::Fault, builder.getInt32(0));
 
+	// Create end path, which will vm exit with RunFinished when handle_syscall
+	// returns true
 	if (INTEGRATED_CALLS){
 		end_path = llvm::BasicBlock::Create(context, "end_path", function);
 		builder.SetInsertPoint(end_path);
 		vm_exit(ExitInfo::ExitReason::RunFinished);
 	}
 
-	builder.SetInsertPoint(entry_block);
-
 	// Create basic blocks recursively
 	llvm::BasicBlock* bb = create_block(pc);
+
+
+	builder.SetInsertPoint(entry_block);
 
 	if (TMP_REGS){
 		// Load each necessary register
@@ -193,6 +200,11 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	// block of a function. This way `bb` is the second basic block and we can
 	// jump to it
 	builder.CreateBr(bb);
+
+	if (TMP_REGS){
+		// Save registers in each vm exit
+		gen_save_regs();
+	}
 
 	// JIT module
 	if (llvm::verifyModule(module)){
@@ -249,6 +261,53 @@ bool Jitter::load_from_disk(const string& name){
 	return true;
 }
 
+void add_opt_passes(llvm::legacy::PassManagerBase &passes,
+                  llvm::legacy::FunctionPassManager &fnPasses,
+                  llvm::TargetMachine *machine)
+{
+	llvm::PassManagerBuilder builder;
+	builder.OptLevel = 3;
+	builder.SizeLevel = 0;
+	builder.Inliner = llvm::createFunctionInliningPass(3, 0, false);
+	builder.LoopVectorize = true;
+	builder.SLPVectorize = true;
+	machine->adjustPassManager(builder);
+
+	builder.populateFunctionPassManager(fnPasses);
+	builder.populateModulePassManager(passes);
+}
+
+void add_link_passes(llvm::legacy::PassManagerBase &passes){
+	llvm::PassManagerBuilder builder;
+	builder.VerifyInput = true;
+	builder.Inliner = llvm::createFunctionInliningPass(3, 0, false);
+	builder.populateLTOPassManager(passes);
+}
+
+void optimize_module(llvm::TargetMachine *machine, llvm::Module *module) {
+	module->setTargetTriple(machine->getTargetTriple().str());
+	module->setDataLayout(machine->createDataLayout());
+
+	llvm::legacy::PassManager passes;
+	llvm::TargetIRAnalysis ir_analysis = machine->getTargetIRAnalysis();
+	passes.add(new llvm::TargetLibraryInfoWrapperPass(machine->getTargetTriple()));
+	passes.add(llvm::createTargetTransformInfoWrapperPass(ir_analysis));
+
+	llvm::legacy::FunctionPassManager fnPasses(module);
+	fnPasses.add(llvm::createTargetTransformInfoWrapperPass(ir_analysis));
+
+	add_opt_passes(passes, fnPasses, machine);
+	add_link_passes(passes);
+
+	fnPasses.doInitialization();
+	for (llvm::Function &func : *module)
+		fnPasses.run(func);
+	fnPasses.doFinalization();
+
+	passes.add(llvm::createVerifierPass());
+	passes.run(*module);
+}
+
 void Jitter::compile(){
 	// Get target machine
 	string error;
@@ -280,22 +339,7 @@ void Jitter::compile(){
 	);
 
 	// Optimize IR
-	llvm::legacy::FunctionPassManager fpm(p_module.get());
-	fpm.add(llvm::createPromoteMemoryToRegisterPass());
-	fpm.add(llvm::createCFGSimplificationPass());
-	fpm.add(llvm::createSROAPass());
-	fpm.add(llvm::createLoopSimplifyCFGPass());
-	fpm.add(llvm::createConstantPropagationPass());
-	fpm.add(llvm::createNewGVNPass());
-	fpm.add(llvm::createReassociatePass());
-	fpm.add(llvm::createPartiallyInlineLibCallsPass());
-	fpm.add(llvm::createDeadCodeEliminationPass());
-	fpm.add(llvm::createCFGSimplificationPass());
-	fpm.add(llvm::createInstructionCombiningPass());
-	fpm.add(llvm::createFlattenCFGPass());
-	fpm.doInitialization();
-	for (llvm::Function& func : module)
-		fpm.run(func);
+	optimize_module(machine, p_module.get());
 
 	// Compile
 	llvm::ExecutionEngine* ee = llvm::EngineBuilder(move(p_module))
@@ -391,7 +435,7 @@ void Jitter::set_reg(uint8_t reg, llvm::Value* val){
 	if (reg != 0){
 		llvm::Value* p_reg = get_preg(reg);
 		builder.CreateStore(val_zext, p_reg);
-		must_be_saved[reg] = true;
+		must_be_saved[builder.GetInsertBlock()][reg] = true;
 	}
 }
 
@@ -515,9 +559,6 @@ void Jitter::vm_exit(ExitInfo::ExitReason reason, llvm::Value* reenter_pc,
 		);
 		builder.CreateStore(info2, p_info2);
 	}
-
-	if (TMP_REGS)
-		save_regs();
 
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
@@ -689,17 +730,17 @@ void Jitter::set_dirty_mem(llvm::Value* addr, vsize_t len){
 	 *         dirty_map[block] = true
 	 *     }
 	 * }
-	 * 
+	 *
 	 * Actually it doesn't check the condition first, so it always performs
 	 * at least one iteration, which is consistent with having len > 0.
-	 * 
+	 *
 	 * Maybe having a for loop is innecessary, most times it will run only
 	 * one iteration and it will be optimized.
 	*/
 
 	// Basic blocks used
 	llvm::BasicBlock* prev_bb = builder.GetInsertBlock();
-	llvm::BasicBlock* for_body = 
+	llvm::BasicBlock* for_body =
 		llvm::BasicBlock::Create(context, "dirty_for_body", function);
 	llvm::BasicBlock* for_register_dirty =
 		llvm::BasicBlock::Create(context, "dirty_for_register_dirty", function);
@@ -819,16 +860,69 @@ void Jitter::save_reg(uint8_t reg){
 }
 
 void Jitter::load_regs(){
-	for (int i = 0; i < 34; i++){
+	for (int i = 0; i < 34; i++)
 		if (must_be_loaded[i])
 			load_reg(i);
-	}
 }
 
 void Jitter::save_regs(){
-	for (int i = 0; i < 34; i++){
-		if (must_be_saved[i])
+	for (int i = 0; i < 34; i++)
+		if (must_be_saved[builder.GetInsertBlock()][i])
 			save_reg(i);
+}
+
+// Add dirty registers of `block` to `succ` and all of its successors
+// If block == succ, add dirty registers of `block` to all of its successors
+void Jitter::join_must_be_saved(llvm::BasicBlock* block, llvm::BasicBlock* succ){
+	// Join block dirty registers to succ dirty registers
+	for (int i = 0; i < 34; i++)
+		if (must_be_saved[block][i])
+			must_be_saved[succ][i] = true;
+
+	// Recursion
+	for (llvm::BasicBlock* new_succ : llvm::successors(succ)){
+		if (new_succ != block)
+			join_must_be_saved(block, new_succ);
+	}
+}
+
+void Jitter::update_must_be_saved(llvm::BasicBlock* block, handled_t& handled){
+	join_must_be_saved(block, block);
+	for (llvm::BasicBlock* succ : llvm::successors(block)){
+		if (handled.insert(succ).second)
+			update_must_be_saved(succ, handled);
+	}
+}
+
+
+void Jitter::gen_save_regs(){
+	handled_t handled;
+	update_must_be_saved(&function->getEntryBlock(), handled);
+
+	for (llvm::BasicBlock& block : *function){
+		// Look for vm exits and save registers before them
+		llvm::Instruction* terminator = block.getTerminator();
+		if (llvm::isa<llvm::ReturnInst>(terminator)){
+			builder.SetInsertPoint(terminator->getPrevNode());
+			save_regs();
+		}
+
+		if (INTEGRATED_CALLS){
+			// Calls from JIT code to emulator code must save some regs.
+			// Look for every call instruction, and save needed regs
+			for (llvm::Instruction& inst : block){
+				if (!llvm::isa<llvm::CallInst>(inst))
+					continue;
+				llvm::CallInst& call = llvm::cast<llvm::CallInst>(inst);
+				if (call.getCalledFunction()->getName() == "handle_syscall"){
+					// Handle syscall: save some registers
+					builder.SetInsertPoint(inst.getPrevNode());
+					for (auto r : {Reg::a0, Reg::a1, Reg::a2, Reg::a3, Reg::sp})
+						if (must_be_saved[&block][r])
+							save_reg(r);
+				}
+			}
+		}
 	}
 }
 
@@ -884,7 +978,7 @@ bool Jitter::handle_inst(vaddr_t pc){
 		llvm::Value* reg_dump  = builder.CreateInBoundsGEP(regs_dump, i_dump);
 		if (options.dump_regs){
 			for (int i = 0; i < 34; i++){
-				llvm::Value* p_reg = 
+				llvm::Value* p_reg =
 					builder.CreateInBoundsGEP(reg_dump, builder.getInt32(i));
 				builder.CreateStore(get_reg(i), p_reg);
 			}
@@ -913,12 +1007,12 @@ bool Jitter::handle_inst(vaddr_t pc){
 const char* exit_reason_map[] = {
 	"syscall", "fault", "indirect branch", "rdhwr", "exception", "breakpoint",
 };
-ostream& operator<<(ostream& os, const ExitInfo& exit_inf){
+ostream& JIT::operator<<(ostream& os, const ExitInfo& exit_inf){
 	if (exit_inf.reason >= sizeof(exit_reason_map)/sizeof(const char*)){
 		os << "Unknown exit reason " << exit_inf.reason;
 		return os;
 	}
-	
+
 	os << "Exit reason: " << exit_reason_map[exit_inf.reason]
 	   << "; reenter pc: 0x" << hex << exit_inf.reenter_pc << dec;
 	if (exit_inf.reason == ExitInfo::ExitReason::Fault)

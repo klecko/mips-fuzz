@@ -2,6 +2,8 @@
 #define _JITTER_H
 
 #include <unordered_map>
+#include <unordered_set>
+#include <bitset>
 #include <mutex>
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -53,8 +55,8 @@ struct ExitInfo {
 	vaddr_t    reenter_pc;
 	uint32_t   info1;
 	uint32_t   info2;
-	friend std::ostream& operator<<(std::ostream& os, const ExitInfo& exit_inf);
 };
+std::ostream& operator<<(std::ostream& os, const ExitInfo& exit_inf);
 
 // Struct that will be accessed by the jitted code to modify the VM
 struct VmState {
@@ -135,13 +137,17 @@ private:
 	} state;
 
 	llvm::Value* p_regs[34];
-	bool must_be_loaded[34];
-	bool must_be_saved[34];
+	std::bitset<34> must_be_loaded;
+	std::unordered_map<llvm::BasicBlock*, std::bitset<34>> must_be_saved;
 
+	typedef std::unordered_set<llvm::BasicBlock*> handled_t;
 	void load_reg(uint8_t reg);
 	void save_reg(uint8_t reg);
 	void load_regs();
 	void save_regs();
+	void join_must_be_saved(llvm::BasicBlock* from, llvm::BasicBlock* succ);
+	void update_must_be_saved(llvm::BasicBlock* block, handled_t& handled);
+	void gen_save_regs();
 	void link_stuff(llvm::ExecutionEngine* ee);
 
 	// Map of created basic blocks. A basic block is not created if it

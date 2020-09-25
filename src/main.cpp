@@ -179,7 +179,7 @@ int main(){
 	// readelf:    0x004c081c
 	// stegdetect: 0x0045d40c
 	try {
-		uint64_t insts = emu.run_until(0x004c081c);
+		uint64_t insts = emu.run_until(0x004c081c);//0x00423ec8);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault running before forking" << endl;
