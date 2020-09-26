@@ -11,7 +11,7 @@ endif()
 project(my_fuzzer)
 
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -Wall \
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -Wall -msse4 \
                      -I/usr/lib/llvm-9/include -D_GNU_SOURCE \
                      -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS \
                      -D__STDC_LIMIT_MACROS")

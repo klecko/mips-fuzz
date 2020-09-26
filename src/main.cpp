@@ -91,7 +91,7 @@ void worker(int id, const Emulator& parent, Corpus& corpus, Stats& stats){
 
 			// Clear coverage
 			cycles = rdtsc1(); // cov_cycles1
-			cov.assign(Corpus::COVERAGE_MAP_SIZE, 0);
+			cov.assign(Corpus::COVERAGE_MAP_SIZE/8, 0);
 			local_stats.cov_cycles += rdtsc1() - cycles;
 
 			// Run case

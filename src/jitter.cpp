@@ -639,11 +639,20 @@ llvm::Value* Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
 }
 
 llvm::Value* Jitter::add_coverage(llvm::Value* cov_id){
-	// Set the corresponding byte in cov_map
+	// Get quotient and rest
+	llvm::Value* cov_id_q    = builder.CreateUDiv(cov_id, builder.getInt32(8));
+	llvm::Value* cov_id_r    = builder.CreateTrunc(
+		builder.CreateURem(cov_id, builder.getInt32(8)),
+		int8_ty
+	);
+
+	// Set the corresponding bit in cov_map
+	llvm::Value* bit         = builder.CreateShl(builder.getInt8(1), cov_id_r);
 	llvm::Value* cov_map     = &function->arg_begin()[2];
-	llvm::Value* p_cov_value = builder.CreateInBoundsGEP(cov_map, cov_id,
-	                                                     "p_cov_value");
-	builder.CreateStore(builder.getInt8(1), p_cov_value);
+	llvm::Value* p_cov_value = builder.CreateInBoundsGEP(cov_map, cov_id_q);
+	llvm::Value* cov_value   = builder.CreateLoad(p_cov_value);
+	llvm::Value* new_cov_value = builder.CreateOr(cov_value, bit);
+	builder.CreateStore(new_cov_value, p_cov_value);
 	return cov_id;
 }
 

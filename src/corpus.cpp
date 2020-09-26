@@ -3,6 +3,7 @@
 #include <sstream>
 #include <cstring> // strerror
 #include <dirent.h>
+#include <xmmintrin.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include "corpus.h"
@@ -11,9 +12,13 @@
 
 using namespace std;
 
+/* Use SSE4 to go over the coverage map. Perf seems to be the same */
+#define VECTORIZED_COV 0
+
+
 Corpus::Corpus(int nthreads, const string& path):
 	lock_corpus(false), mutated_inputs(nthreads), lock_uniq_crashes(false),
-	cov_n(0), recorded_cov(COVERAGE_MAP_SIZE)
+	cov_n(0), recorded_cov(COVERAGE_MAP_SIZE/8)
 {
 	// Try to open the directory
 	DIR* dir = opendir(path.c_str());
@@ -86,7 +91,7 @@ const std::string& Corpus::get_new_input(int id, Rng& rng){
 	while (lock_corpus.test_and_set());
 	mutated_inputs[id] = corpus[rng.rnd() % corpus.size()];
 	lock_corpus.clear();
-	//mutate_input(id, rng);
+	mutate_input(id, rng);
 	return mutated_inputs[id];
 }
 
@@ -94,13 +99,48 @@ void Corpus::report_cov(int id, const cov_t& cov){
 	assert(cov.size() == recorded_cov.size());
 	size_t cov_size = cov.size();
 
-	// If there's any new coverage, record it and increment coverage counter
+	// Go over both coverage maps checking if we've got new coverage
+	// In that case, record it and increment coverage counter
 	bool new_cov = false;
-	for (size_t i = 0; i < cov_size; i++)
-		if (cov[i] && (!recorded_cov[i].test_and_set())){
-			cov_n++;
-			new_cov |= true;
+	size_t  i, j, j_q, j_r;
+	uint8_t bit;
+	#if VECTORIZED_COV
+	__m128i rec_cov_v, cov_v, or_v, xor_v;
+	for (i = 0; i < cov_size; i+=sizeof(cov_v)){
+		rec_cov_v = _mm_load_si128((__m128i*)&recorded_cov[i]);
+		cov_v     = _mm_load_si128((__m128i*)&cov[i]);
+		or_v      = _mm_or_si128(rec_cov_v, cov_v);
+		xor_v     = _mm_xor_si128(or_v, rec_cov_v);
+		if (!_mm_testz_si128(xor_v, xor_v)){
+	#else
+	size_t rec_cov_v, cov_v;
+	for (i = 0; i < cov_size; i+=sizeof(cov_v)){
+		rec_cov_v = *(size_t*)(&recorded_cov[i]);
+		cov_v     = *(size_t*)(&cov[i]);
+		if ((rec_cov_v | cov_v) != rec_cov_v){
+	#endif
+			// There is new coverage. Test each bit in cov_v
+			for (j = i*8; j < (i+sizeof(cov_v))*8; j++){
+				j_q = j / 8;
+				j_r = j % 8;
+				bit = 1 << j_r;
+				if (cov[j_q] & bit){
+					// Better way of doing this?
+					bool test = false;
+					asm("lock bts %[i], %[cov_val]\n"
+						"setc %[test]"
+						: [cov_val] "+m" (recorded_cov[j_q]), [test] "+r" (test)
+						: [i] "r" (j_r)
+						:
+					);
+					if (!test){
+						cov_n++;
+						new_cov |= true;
+					}
+				}
+			}
 		}
+	}
 
 	// If there was new coverage, add associated input to corpus
 	if (new_cov)

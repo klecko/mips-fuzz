@@ -407,7 +407,7 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 		cycles = rdtsc2(); // jit_cache_cycles
 		jit_block = jit_cache[pc/4];
 		if (!jit_block){
-			jit_block = JIT::Jitter(pc, mmu, cov.size(), breakpoints, {
+			jit_block = JIT::Jitter(pc, mmu, cov.size()*8, breakpoints, {
 				{"handle_syscall", (void*)&Emulator::handle_syscall},
 				{"handle_rdhwr",   (void*)&Emulator::handle_rdhwr},
 			}, options).get_result();
@@ -423,7 +423,6 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 
 		// Handle the vm exit
 		cycles = rdtsc2(); // vm_exit_cycles
-		//cout << exit_inf << endl;
 		switch (exit_inf.reason){
 			case JIT::ExitInfo::ExitReason::RunFinished:
 			case JIT::ExitInfo::ExitReason::IndirectBranch:
@@ -439,11 +438,11 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 				// accurate fault. I'm not sure if this is correct as state is
 				// not restored and some instructions are executed twice.
 				// THINK ABOUT THIS
-				//throw Fault(Fault::Type::Unknown, -1);
+				throw Fault(Fault::Type::Unknown, -1);
 
 				// We can't do this because it will record coverage with
 				// interpreter cov ids
-				run_interpreter(input, cov, local_stats); // this will throw
+				//run_interpreter(input, cov, local_stats); // this will throw
 				die("JIT said fault but interpreter didn't\n");
 			case JIT::ExitInfo::ExitReason::Exception:
 				die("Exception??\n");

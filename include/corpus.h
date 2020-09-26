@@ -80,7 +80,7 @@ private:
 
 	// Recorded coverage across runs
 	std::atomic<size_t> cov_n;
-	std::vector<std::atomic_flag> recorded_cov;
+	cov_t recorded_cov;
 
 	// Max input size, used in expand mutation
 	size_t max_input_size;
