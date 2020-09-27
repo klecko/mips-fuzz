@@ -712,6 +712,31 @@ void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len){
 	builder.SetInsertPoint(nofault_path);
 }
 
+void Jitter::set_init(llvm::Value* addr, vsize_t len){
+	llvm::Type* mask_ty = llvm::Type::getIntNTy(context, len*8);
+	llvm::Type* ptr_ty  = llvm::Type::getIntNPtrTy(context, len*8);
+
+	// Compute permission mask for given len
+	uint64_t mask = 0;
+	for (vsize_t i = 0; i < len; i++)
+		mask |= (Mmu::PERM_INIT << (i*8));
+	llvm::Value* mask_val = llvm::ConstantInt::get(mask_ty, mask);
+
+	// Get pointer to permissions value, cast it and load its value
+	llvm::Value* p_perm  = builder.CreateInBoundsGEP(
+		state.p_perms,
+		addr,
+		"p_perm"
+	);
+	llvm::Value* p_perm_cast =
+		builder.CreateBitCast(p_perm, ptr_ty, "p_perm_cast");
+	llvm::Value* perm_val = builder.CreateLoad(p_perm_cast, "perm");
+
+	// Or perm value with mask and save it
+	llvm::Value* new_perm_val = builder.CreateOr(perm_val, mask_val);
+	builder.CreateStore(new_perm_val, p_perm_cast);
+}
+
 void Jitter::check_perms_mem(llvm::Value* addr, vsize_t len, uint8_t perm){
 	llvm::Type* mask_ty = llvm::Type::getIntNTy(context, len*8);
 	llvm::Type* ptr_ty  = llvm::Type::getIntNPtrTy(context, len*8);
@@ -766,100 +791,54 @@ void Jitter::check_alignment_mem(llvm::Value* addr, vsize_t len){
 	builder.SetInsertPoint(nofault_path);
 }
 
-void Jitter::set_dirty_mem(llvm::Value* addr, vsize_t len){
-	assert(len > 0);
-	/* Pseudocode:
-	 *
-	 * block_begin = addr/DIRTY_BLOCK_SIZE
-	 * block_end   = (addr+len+DIRTY_BLOCK_SIZE-1)/DIRTY_BLOCK_SIZE
-	 * for (block = block_begin; block < block_end; block++){
-	 *     if (!dirty_map[block]){
-	 *         dirty_vec[dirty_size++] = block
-	 *         dirty_map[block] = true
-	 *     }
-	 * }
-	 *
-	 * Actually it doesn't check the condition first, so it always performs
-	 * at least one iteration, which is consistent with having len > 0.
-	 *
-	 * Maybe having a for loop is innecessary, most times it will run only
-	 * one iteration and it will be optimized.
-	*/
-
+void Jitter::set_dirty_mem(llvm::Value* addr){
 	// Basic blocks used
-	llvm::BasicBlock* prev_bb = builder.GetInsertBlock();
-	llvm::BasicBlock* for_body =
-		llvm::BasicBlock::Create(context, "dirty_for_body", function);
-	llvm::BasicBlock* for_register_dirty =
-		llvm::BasicBlock::Create(context, "dirty_for_register_dirty", function);
-	llvm::BasicBlock* for_cond =
-		llvm::BasicBlock::Create(context, "dirty_for_cond", function);
-	llvm::BasicBlock* for_end =
-		llvm::BasicBlock::Create(context, "dirty_for_end", function);
+	llvm::BasicBlock* register_dirty_block =
+		llvm::BasicBlock::Create(context, "dirty_register_dirty", function);
+	llvm::BasicBlock* end_block =
+		llvm::BasicBlock::Create(context, "dirty_end", function);
 
-	// Computations before entering for body
+	// Check if block is already dirty. The UDiv is optimized into `shr`
 	llvm::Value* dirty_block_sz = builder.getInt32(Mmu::DIRTY_BLOCK_SIZE);
-	llvm::Value* addr_end    = builder.CreateAdd(addr, builder.getInt32(len));
-	llvm::Value* block_begin = builder.CreateUDiv(addr, dirty_block_sz,
-	                                              "block_begin");
-	llvm::Value* block_end   = builder.CreateUDiv(
-		builder.CreateAdd(
-			addr_end, 
-			builder.CreateSub(dirty_block_sz, builder.getInt32(1))
-		),
-		dirty_block_sz,
-		"block_end"
-	);
-	builder.CreateBr(for_body);
+	llvm::Value* i_block        = builder.CreateUDiv(addr, dirty_block_sz);
+	llvm::Value* p_dirty_value  =
+		builder.CreateInBoundsGEP(state.p_dirty_map, i_block);
+	llvm::Value* dirty_value    = builder.CreateLoad(p_dirty_value);
+	llvm::Value* cmp = builder.CreateICmpEQ(dirty_value, builder.getInt8(0));
+	builder.CreateCondBr(cmp, register_dirty_block, end_block);
 
-	// For body. Load dirty value and branch
-	builder.SetInsertPoint(for_body);
-	llvm::PHINode* block = builder.CreatePHI(int32_ty, 2, "block");
-	block->addIncoming(block_begin, prev_bb);
-	llvm::Value* p_dirty_value =
-		builder.CreateInBoundsGEP(state.p_dirty_map, block, "p_dirty_value");
-	llvm::Value* dirty_value = builder.CreateLoad(p_dirty_value, "dirty_value");
-	llvm::Value* cmp_dirty = 
-		builder.CreateICmpEQ(dirty_value, builder.getInt8(0), "cmp_dirty");
-	builder.CreateCondBr(cmp_dirty, for_register_dirty, for_cond);
-
-	// For register dirty. Block was not dirty: set it as dirty in the map and
-	// add it to the vector.
-	builder.SetInsertPoint(for_register_dirty);
+	// Block was not dirty: set it as dirty in the map and add it to the vector
+	builder.SetInsertPoint(register_dirty_block);
 	builder.CreateStore(builder.getInt8(1), p_dirty_value);
-	llvm::Value* dirty_size = builder.CreateLoad(state.p_dirty_size, "dirty_size");
-	builder.CreateStore(block, 
+	llvm::Value* dirty_size = builder.CreateLoad(state.p_dirty_size);
+	builder.CreateStore(i_block,
 		builder.CreateInBoundsGEP(state.p_dirty_vec, dirty_size));
 	builder.CreateStore(builder.CreateAdd(dirty_size, builder.getInt32(1)),
 	                    state.p_dirty_size);
-	builder.CreateBr(for_cond);
+	builder.CreateBr(end_block);
 
-	// For cond, increment block and check end condition.
-	builder.SetInsertPoint(for_cond);
-	llvm::Value* block_inc = builder.CreateAdd(block, builder.getInt32(1),
-	                                           "block_inc");
-	block->addIncoming(block_inc, for_cond);
-	llvm::Value* cmp_exit  = builder.CreateICmpUGE(block_inc, block_end,
-	                                               "cmp_exit");
-	builder.CreateCondBr(cmp_exit, for_end, for_body);
-
-	// For end. Continue with the store
-	builder.SetInsertPoint(for_end);
+	// Continue building on end_block
+	builder.SetInsertPoint(end_block);
 }
 
-llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc){
+llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc,
+                              bool chk_uninit)
+{
 	assert(len != 0);
 
-	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
-	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
-	#endif
+	if (DETAILED_FAULT)
+		builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
 
 	// Check out of bounds
 	check_bounds_mem(addr, len);
 
-	// Check permissions
-	check_perms_mem(addr, len, Mmu::PERM_READ);
+	// Check permissions. Checking for reading implies checking for initialized
+	// memory by default, but it can be disabled
+	uint8_t perm = Mmu::PERM_READ;
+	if (chk_uninit)
+		perm |= Mmu::PERM_INIT;
+	check_perms_mem(addr, len, perm);
 
 	// Check alignment
 	check_alignment_mem(addr, len);
@@ -875,11 +854,11 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
                        vaddr_t pc)
 {
 	assert(len != 0);
+	assert(Mmu::DIRTY_BLOCK_SIZE >= len);
 
-	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
-	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
-	#endif
+	if (DETAILED_FAULT)
+		builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
 
 	// Check out of bounds
 	check_bounds_mem(addr, len);
@@ -890,8 +869,12 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 	// Check alignment
 	check_alignment_mem(addr, len);
 
+	// Set initialized
+	if (CHECK_UNINIT)
+		set_init(addr, len);
+
 	// Set dirty
-	set_dirty_mem(addr, len);
+	set_dirty_mem(addr);
 
 	// Get pointer to memory position, cast it from i8* to iN*, cast value from
 	// ?? to iN, and write value to pointer

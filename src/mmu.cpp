@@ -194,8 +194,7 @@ void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const {
 			else if (perm == PERM_EXEC)
 				throw Fault(Fault::Type::Exec, addr);
 			else if (perms[addr] & PERM_READ)
-				{}
-				//throw Fault(Fault::Type::Uninit, addr);
+				throw Fault(Fault::Type::Uninit, addr);
 			else if (!(perms[addr] & PERM_READ))
 				throw Fault(Fault::Type::Read, addr);
 			else
@@ -209,7 +208,7 @@ void Mmu::read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit) const {
 
 	// Check out of bounds
 	check_bounds(src, len, perm);
-	
+
 	// Check perms. Checking for reading implies checking for initialized memory
 	// by default, but it can be disabled
 	if (chk_uninit)
@@ -229,7 +228,8 @@ void Mmu::write_mem(vaddr_t dst, const void* src, vsize_t len){
 	check_perms(dst, len, PERM_WRITE);
 
 	// Memory has been initialized, update perms
-	set_init(dst, len);
+	if (CHECK_UNINIT)
+		set_init(dst, len);
 
 	// Update dirty blocks
 	set_dirty(dst, len);
@@ -404,6 +404,9 @@ void Mmu::reset(const Mmu& other){
 	min_brk    = other.min_brk;
 	max_brk    = other.max_brk;
 	cur_allocs = other.cur_allocs;
+
+	/* if (memcmp(memory, other.memory, memory_len))
+		die("reset check failed!\n"); */
 }
 
 uint8_t parse_perm(const string& flag){

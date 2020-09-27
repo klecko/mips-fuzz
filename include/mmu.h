@@ -15,6 +15,8 @@ not spending much time reseting anyway
 Maybe reduce unnecesary sanity checks
 */
 
+#define CHECK_UNINIT 0
+
 struct RunOOM : std::exception {};
 
 class Mmu {
@@ -69,7 +71,8 @@ public:
 
 	// Read `len` bytes from virtual addr `src` into `dst`.
 	// Checks bounds and perms
-	void read_mem(void* dst, vaddr_t src, vsize_t len, bool chk_uninit=false) const;
+	void read_mem(void* dst, vaddr_t src, vsize_t len,
+	              bool chk_uninit=CHECK_UNINIT) const;
 
 	// Write `len` bytes from `src` into virtual addr `dst`.
 	// Checks bounds and perms
@@ -89,7 +92,7 @@ public:
 
 	// Reads a value from memory. Checks bounds, perms and alignment
 	template <class T>
-	T read(vaddr_t addr, bool chk_uninit=true) const;
+	T read(vaddr_t addr, bool chk_uninit=CHECK_UNINIT) const;
 
 	// Writes a value to memory. Checks bounds, perms and alignment
 	template <class T>

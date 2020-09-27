@@ -13,7 +13,7 @@
 
 #define TMP_REGS 0
 #define INTEGRATED_CALLS 0
-#define DETAILED_FAULT 0
+#define DETAILED_FAULT 1
 
 // For debugging purposes: check repeated coverage ids. This generates a vm exit
 // after each code coverage event
@@ -255,11 +255,15 @@ private:
 	// Generate alignment checks for memory access
 	void check_alignment_mem(llvm::Value* addr, vsize_t len);
 
-	// Set memory region from `addr` to `addr+len` as dirty
-	void set_dirty_mem(llvm::Value* addr, vsize_t len);
+	// Set memory region from `addr` to `addr+len` as initialized
+	void set_init(llvm::Value* addr, vsize_t len);
+
+	// Set block corresponding to `addr` as dirty
+	void set_dirty_mem(llvm::Value* addr);
 
 	// Reads a value from memory. Checks bounds, perms and alignment
-	llvm::Value* read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc);
+	llvm::Value* read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc,
+	                      bool chk_uninit=CHECK_UNINIT);
 
 	// Writes a value to memory. Checks bounds, perms and alignment
 	void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
