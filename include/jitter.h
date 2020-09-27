@@ -123,6 +123,7 @@ private:
 	llvm::Function*    function;
 	llvm::Value*       p_instr;
 
+	llvm::Value*       p_fault_pc;
 	llvm::BasicBlock*  fault_path;
 	llvm::BasicBlock*  end_path;
 
@@ -251,10 +252,11 @@ private:
 	void set_dirty_mem(llvm::Value* addr, vsize_t len);
 
 	// Reads a value from memory. Checks bounds, perms and alignment
-	llvm::Value* read_mem(llvm::Value* addr, vsize_t len);
+	llvm::Value* read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc);
 
 	// Writes a value to memory. Checks bounds, perms and alignment
-	void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len);
+	void write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
+	               vaddr_t pc);
 
 	// Lift code at `pc`. It calls instruction handlers, which eventually
 	// create other blocks until every path leads to a vm exit

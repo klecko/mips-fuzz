@@ -170,12 +170,19 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	}
 
 	// Create fault path. Whenever a fault occurs, this fast vm exit will be
-	// taken and we'll run the interpreter to get more details about the fault.
-	// This is much better than generating code for every possible fault in
-	// every memory access
+	// taken. We exit with the fault pc as reenter_pc, so interpreter can then
+	// re-run last instruction to get more details about the fault. Having the
+	// fault pc has a small perf cost because each write_mem and read_mem has
+	// to set the fault pc just in case there's a fault.
+	// The other option is not saving the fault pc and running the interpreter
+	// from the beginning when there's a fault, but that means each crash run
+	// would be run twice.
+	// Anyways, having this fast vm exit is much better than generating
+	// a vm exit for every possible fault in every memory access.
+	p_fault_pc = builder.CreateAlloca(int32_ty);
 	fault_path = llvm::BasicBlock::Create(context, "fault_path", function);
 	builder.SetInsertPoint(fault_path);
-	vm_exit(ExitInfo::ExitReason::Fault, builder.getInt32(0));
+	vm_exit(ExitInfo::ExitReason::Fault, builder.CreateLoad(p_fault_pc));
 
 	// Create end path, which will vm exit with RunFinished when handle_syscall
 	// returns true
@@ -808,8 +815,11 @@ void Jitter::set_dirty_mem(llvm::Value* addr, vsize_t len){
 	builder.SetInsertPoint(for_end);
 }
 
-llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len){
+llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc){
 	assert(len != 0);
+
+	// Store pc just in case there's a fault
+	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
 
 	// Check out of bounds
 	check_bounds_mem(addr, len);
@@ -827,8 +837,13 @@ llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len){
 	return builder.CreateLoad(p_value_cast);
 }
 
-void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len){
+void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
+                       vaddr_t pc)
+{
 	assert(len != 0);
+
+	// Store pc just in case there's a fault
+	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
 
 	// Check out of bounds
 	check_bounds_mem(addr, len);

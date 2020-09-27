@@ -469,7 +469,7 @@ bool Jitter::inst_lw(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	set_reg(inst.t, read_mem(addr, 4));
+	set_reg(inst.t, read_mem(addr, 4, pc));
 	return false;
 }
 
@@ -483,7 +483,7 @@ bool Jitter::inst_sw(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 4);
+	write_mem(addr, get_reg(inst.t), 4, pc);
 	return false;
 }
 
@@ -618,7 +618,7 @@ bool Jitter::inst_lhu(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 2);
+	llvm::Value* value = read_mem(addr, 2, pc);
 	set_reg(inst.t, value);
 	return false;
 }
@@ -977,7 +977,7 @@ bool Jitter::inst_lb(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 1); // type: i8
+	llvm::Value* value = read_mem(addr, 1, pc); // type: i8
 	llvm::Value* value_sext = builder.CreateSExt(value, int32_ty); // type: i32
 	set_reg(inst.t, value_sext);
 	return false;
@@ -1052,7 +1052,7 @@ bool Jitter::inst_lh(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 2); // type: i16
+	llvm::Value* value = read_mem(addr, 2, pc); // type: i16
 	llvm::Value* value_sext = builder.CreateSExt(value, int32_ty); // type: i32
 	set_reg(inst.t, value_sext);
 	return false;
@@ -1062,7 +1062,7 @@ bool Jitter::inst_lbu(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* value = read_mem(addr, 1);
+	llvm::Value* value = read_mem(addr, 1, pc);
 	set_reg(inst.t, value);
 	return false;
 }
@@ -1074,6 +1074,9 @@ bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
 	llvm::Value* offset =
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
+
+	// Store pc just in case there's a fault
+	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
 
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
@@ -1099,7 +1102,9 @@ bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	// Create fault path
+	// Store pc just in case there's a fault
+	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
 	llvm::Value* p_mem = get_pmemory(addr_align);
@@ -1119,7 +1124,7 @@ bool Jitter::inst_sb(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 1);
+	write_mem(addr, get_reg(inst.t), 1, pc);
 	return false;
 }
 
@@ -1127,7 +1132,7 @@ bool Jitter::inst_sh(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	write_mem(addr, get_reg(inst.t), 2);
+	write_mem(addr, get_reg(inst.t), 2, pc);
 	return false;
 }
 
@@ -1139,7 +1144,9 @@ bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	// Create fault path
+	// Store pc just in case there's a fault
+	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
 	llvm::Value* p_mem = get_pmemory(addr_align);
@@ -1169,7 +1176,9 @@ bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
 	// the reg to the value and writing back to memory, just change the value in
 	// memory. Some repeated code but I think it's worth it
 
-	// Create fault path
+	// Store pc just in case there's a fault
+	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
 	llvm::Value* p_mem = get_pmemory(addr_align);
@@ -1405,7 +1414,7 @@ bool Jitter::inst_lwc1(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* v    = as_float(read_mem(addr, 4));
+	llvm::Value* v    = as_float(read_mem(addr, 4, pc));
 	sets_reg(inst.t, v);
 	return false;
 }
@@ -1415,7 +1424,7 @@ bool Jitter::inst_swc1(vaddr_t pc, uint32_t val){
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
 	llvm::Value* v    = as_u32(gets_reg(inst.t));
-	write_mem(addr, v, 4);
+	write_mem(addr, v, 4, pc);
 	return false;
 }
 
@@ -1423,7 +1432,7 @@ bool Jitter::inst_ldc1(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* v    = builder.CreateBitCast(read_mem(addr, 8), double_ty);
+	llvm::Value* v    = builder.CreateBitCast(read_mem(addr, 8, pc), double_ty);
 	setd_reg(inst.t, v);
 	return false;
 }
@@ -1433,7 +1442,7 @@ bool Jitter::inst_sdc1(vaddr_t pc, uint32_t val){
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
 	llvm::Value* v    = builder.CreateBitCast(getd_reg(inst.t), int64_ty);
-	write_mem(addr, v, 8);
+	write_mem(addr, v, 8, pc);
 	return false;
 }
 

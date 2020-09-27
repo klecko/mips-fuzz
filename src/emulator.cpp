@@ -434,15 +434,10 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 				break;
 			case JIT::ExitInfo::ExitReason::Fault:
 				// JIT just tells us there's a fault with no additional info.
-				// Run interpreter from last reenter pc and let it throw a more
-				// accurate fault. I'm not sure if this is correct as state is
-				// not restored and some instructions are executed twice.
-				// THINK ABOUT THIS
-				throw Fault(Fault::Type::Unknown, -1);
-
-				// We can't do this because it will record coverage with
-				// interpreter cov ids
-				//run_interpreter(input, cov, local_stats); // this will throw
+				// Run last instruction with the interpreter and let it throw
+				// a more accurate fault.
+				pc = exit_inf.reenter_pc;
+				run_inst(cov, local_stats); // this will throw
 				die("JIT said fault but interpreter didn't\n");
 			case JIT::ExitInfo::ExitReason::Exception:
 				die("Exception??\n");
@@ -811,7 +806,7 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 			return count;
 	}
 
-	die("strange write\n");
+	die("write(%d, 0x%X, %d)\n", fd, buf_addr, count);
 
 	// Check if file is open
 	if (!open_files.count(fd))
