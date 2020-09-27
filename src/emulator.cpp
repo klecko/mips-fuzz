@@ -433,12 +433,16 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 				handle_syscall(regs[Reg::v0]);
 				break;
 			case JIT::ExitInfo::ExitReason::Fault:
+				#if DETAILED_FAULT
 				// JIT just tells us there's a fault with no additional info.
 				// Run last instruction with the interpreter and let it throw
 				// a more accurate fault.
 				pc = exit_inf.reenter_pc;
 				run_inst(cov, local_stats); // this will throw
 				die("JIT said fault but interpreter didn't\n");
+				#else
+				throw Fault(Fault::Type::Unknown, -1);
+				#endif
 			case JIT::ExitInfo::ExitReason::Exception:
 				die("Exception??\n");
 			case JIT::ExitInfo::ExitReason::Rdhwr:

@@ -818,8 +818,10 @@ void Jitter::set_dirty_mem(llvm::Value* addr, vsize_t len){
 llvm::Value* Jitter::read_mem(llvm::Value* addr, vsize_t len, vaddr_t pc){
 	assert(len != 0);
 
+	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
 	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+	#endif
 
 	// Check out of bounds
 	check_bounds_mem(addr, len);
@@ -842,8 +844,10 @@ void Jitter::write_mem(llvm::Value* addr, llvm::Value* value, vsize_t len,
 {
 	assert(len != 0);
 
+	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
 	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+	#endif
 
 	// Check out of bounds
 	check_bounds_mem(addr, len);

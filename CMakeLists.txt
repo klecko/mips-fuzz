@@ -8,7 +8,7 @@ else()
     set(CMAKE_CXX_COMPILER g++)
 endif()
 
-project(my_fuzzer)
+project(mips-fuzz)
 
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -Wall -msse4 \
@@ -26,5 +26,5 @@ set(SOURCE_FILES src/main.cpp src/mmu.cpp src/elf_parser.cpp src/emulator.cpp
                  src/jitter_instr.cpp)
 include_directories(include)
 
-add_executable(my_fuzzer ${SOURCE_FILES})
-target_link_libraries(my_fuzzer "LLVM-9")
+add_executable(mips-fuzz ${SOURCE_FILES})
+target_link_libraries(mips-fuzz "LLVM-9")

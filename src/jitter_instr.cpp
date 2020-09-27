@@ -1075,8 +1075,10 @@ bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
+	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
 	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+	#endif
 
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
@@ -1102,8 +1104,10 @@ bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
+	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
 	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+	#endif
 
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
@@ -1144,8 +1148,10 @@ bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
 		builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
+	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
 	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+	#endif
 
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
@@ -1176,8 +1182,10 @@ bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
 	// the reg to the value and writing back to memory, just change the value in
 	// memory. Some repeated code but I think it's worth it
 
+	#if DETAILED_FAULT
 	// Store pc just in case there's a fault
 	builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
+	#endif
 
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);

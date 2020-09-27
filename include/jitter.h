@@ -13,6 +13,7 @@
 
 #define TMP_REGS 0
 #define INTEGRATED_CALLS 0
+#define DETAILED_FAULT 0
 
 const int NUM_REGS = 34;
 enum Reg {
