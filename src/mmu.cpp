@@ -309,13 +309,12 @@ vaddr_t Mmu::alloc(vsize_t size){
 
 	// Check out of memory and overflow
 	if (next_alloc + size > stack){
-		//printf("Out of memory allocating 0x%X bytes\n", size);
+		dbgprintf("Out of memory allocating 0x%X bytes\n", size);
 		throw RunOOM();
-		return 0;
 	}
 	if (next_alloc + size < next_alloc){
-		printf("Overflow allocating 0x%X bytes\n", size);
-		return 0;
+		dbgprintf("Overflow allocating 0x%X bytes\n", size);
+		throw RunOOM();
 	}
 
 	vsize_t aligned_size  = (size + 0xF) & ~0xF;

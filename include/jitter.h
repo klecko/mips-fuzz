@@ -14,6 +14,7 @@
 #define TMP_REGS 0
 #define INTEGRATED_CALLS 0
 
+const int NUM_REGS = 34;
 enum Reg {
 	zero, at, v0, v1, a0, a1, a2, a3,
 	t0,   t1, t2, t3, t4, t5, t6, t7,

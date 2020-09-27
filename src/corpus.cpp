@@ -87,7 +87,7 @@ size_t Corpus::get_uniq_crashes_size() const {
 }
 
 const std::string& Corpus::get_new_input(int id, Rng& rng){
-	// Copy a random input and mutate it
+	// Copy a random input and mutate it. Not sure if lock is necessary here
 	while (lock_corpus.test_and_set());
 	mutated_inputs[id] = corpus[rng.rnd() % corpus.size()];
 	lock_corpus.clear();

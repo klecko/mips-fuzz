@@ -165,7 +165,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 
 	if (TMP_REGS){
 		// Allocate stack for each reg
-		for (int i = 0; i < 34; i++)
+		for (int i = 0; i < NUM_REGS; i++)
 			p_regs[i] = builder.CreateAlloca(int32_ty);
 	}
 
@@ -869,13 +869,13 @@ void Jitter::save_reg(uint8_t reg){
 }
 
 void Jitter::load_regs(){
-	for (int i = 0; i < 34; i++)
+	for (int i = 0; i < NUM_REGS; i++)
 		if (must_be_loaded[i])
 			load_reg(i);
 }
 
 void Jitter::save_regs(){
-	for (int i = 0; i < 34; i++)
+	for (int i = 0; i < NUM_REGS; i++)
 		if (must_be_saved[builder.GetInsertBlock()][i])
 			save_reg(i);
 }
@@ -884,7 +884,7 @@ void Jitter::save_regs(){
 // If block == succ, add dirty registers of `block` to all of its successors
 void Jitter::join_must_be_saved(llvm::BasicBlock* block, llvm::BasicBlock* succ){
 	// Join block dirty registers to succ dirty registers
-	for (int i = 0; i < 34; i++)
+	for (int i = 0; i < NUM_REGS; i++)
 		if (must_be_saved[block][i])
 			must_be_saved[succ][i] = true;
 
@@ -986,14 +986,14 @@ bool Jitter::handle_inst(vaddr_t pc){
 		llvm::Value* regs_dump = &function->arg_begin()[3];
 		llvm::Value* reg_dump  = builder.CreateInBoundsGEP(regs_dump, i_dump);
 		if (options.dump_regs){
-			for (int i = 0; i < 34; i++){
+			for (int i = 0; i < NUM_REGS; i++){
 				llvm::Value* p_reg =
 					builder.CreateInBoundsGEP(reg_dump, builder.getInt32(i));
 				builder.CreateStore(get_reg(i), p_reg);
 			}
 		}
 		llvm::Value* p_reg =
-			builder.CreateInBoundsGEP(reg_dump, builder.getInt32(34));
+			builder.CreateInBoundsGEP(reg_dump, builder.getInt32(NUM_REGS));
 		builder.CreateStore(builder.getInt32(pc), p_reg);
 	}
 

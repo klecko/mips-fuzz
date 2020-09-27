@@ -16,17 +16,18 @@ Adapt the elf parser to my code
 
 void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
-	uint32_t elapsed = 0;
-	double minstrps, fcps, run_time, reset_time, cov_time, mut_time,
+	chrono::duration<double> elapsed;
+	chrono::steady_clock::time_point start = chrono::steady_clock::now();
+	double mips, fcps, run_time, reset_time, cov_time, mut_time,
 	       inst_handl_time, fetch_inst_time, jump_time, bp_time, corpus_sz,
 	       jit_cache_time, vm_time, vm_exit_time;
 	uint64_t cases, uniq_crashes, crashes, timeouts, ooms, cov, corpus_n;
 	while (true){
 		this_thread::sleep_for(chrono::seconds(1));
-		elapsed++;
+		elapsed         = chrono::steady_clock::now() - start;
 		cases           = stats.cases;
-		minstrps        = (double)stats.instr / ((uint64_t)elapsed * 1000000);
-		fcps            = (double)cases / elapsed;
+		mips            = (double)stats.instr / (elapsed.count() * 1000000);
+		fcps            = (double)cases / elapsed.count();
 		cov             = corpus.get_cov();
 		corpus_n        = corpus.size();
 		corpus_sz       = (double)corpus.memsize() / 1024;
@@ -45,10 +46,10 @@ void print_stats(Stats& stats, const Corpus& corpus){
 		jit_cache_time  = (double)stats.jit_cache_cycles / stats.total_cycles;
 		vm_time         = (double)stats.vm_cycles / stats.total_cycles;
 		vm_exit_time    = (double)stats.vm_exit_cycles / stats.total_cycles;
-		printf("[%u secs] cases: %lu, minstrps: %.3f, fcps: %.3f, cov: %lu, "
+		printf("[%.3f] cases: %lu, mips: %.3f, fcps: %.3f, cov: %lu, "
 		       "corpus: %lu/%.3fKB, uniq crashes: %lu, crashes: %lu, "
 		       "timeouts: %lu, ooms: %lu\n",
-		       elapsed, cases, minstrps, fcps, cov, corpus_n, corpus_sz,
+		       elapsed.count(), cases, mips, fcps, cov, corpus_n, corpus_sz,
 		       uniq_crashes, crashes, timeouts, ooms);
 
 		if (TIMETRACE >= 1)

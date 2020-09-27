@@ -357,10 +357,10 @@ const char* regs_map[] = {
 void dump_regs(uint32_t regs_state[][35], uint32_t n, bool all_regs){
 	for (uint32_t h = 0; h < n; h++){
 		cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
-		cout << "PC:  " << setw(8) << regs_state[h][34] << endl;
+		cout << "PC:  " << setw(8) << regs_state[h][NUM_REGS] << endl;
 		if (all_regs){
-			for (int i = 0; i < 34; i++){
-				cout << "$" << regs_map[i] << ": " << setw(8) 
+			for (int i = 0; i < NUM_REGS; i++){
+				cout << "$" << regs_map[i] << ": " << setw(8)
 						<< regs_state[h][i] << "\t";
 				if ((i+1)%8 == 0)
 					cout << endl;
@@ -1093,7 +1093,7 @@ void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
 		default:
 			die("Unimplemented rdhwr at 0x%X: %d\n", prev_pc, hwr);
 	}
-	
+
 	set_reg(reg, result);
 }
 
@@ -1104,7 +1104,7 @@ void Emulator::dump(ostream& os, bool dump_pc, bool dump_regs) const {
 	}
 
 	if (dump_regs){
-		for (int i = 0; i < 32; i++){
+		for (int i = 0; i < NUM_REGS-2; i++){
 			os << "$" << regs_map[i] << ": " << setw(8) << regs[i] << "\t";
 			if ((i+1)%8 == 0)
 				os << endl;
@@ -1117,18 +1117,5 @@ void Emulator::dump(ostream& os, bool dump_pc, bool dump_regs) const {
 
 ostream& operator<<(ostream& os, const Emulator& emu){
 	emu.dump(os, true, true);
-	/* for (int i = 0; i < 32; i+=2){
-		os << "$f" << setw(2) << i << ": " << setw(8) << emu.getd_reg(i) << "\t";
-		if ((i+2) % 16 == 0)
-			os << endl;
-	}
-
-	os << "condition: " << emu.condition << "\t"
-	   << "jump addr: " << emu.jump_addr << endl;
-
-	for (const auto& f : emu.open_files)
-		cout << "file fd " << f.first << ": " << f.second << endl;
-	os << dec; */
-
 	return os;
 }
