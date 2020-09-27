@@ -14,10 +14,6 @@ using namespace JIT;
 // Enable code coverage
 #define COVERAGE 1
 
-// For debugging purposes: check repeated coverage ids. This generates a vm exit
-// after each code coverage event
-#define DBG_CHECK_REPEATED_COV_ID 0
-
 // Helpers for FPU instructions
 #define as_u32(value) builder.CreateBitCast(value, int32_ty)
 #define as_float(value) builder.CreateBitCast(value, float_ty)
@@ -416,19 +412,8 @@ bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	if (END_COMPILING_ON_CALLS){
 		// This jump is a call: finish compilation
@@ -497,14 +482,8 @@ bool Jitter::inst_jalr(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(builder.getInt32(pc), jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, jump_addr,
-			        builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(builder.getInt32(pc), jump_addr))
+		return true;
 
 	// Generate indirect branch and finish compilation
 	vm_exit(ExitInfo::ExitReason::IndirectBranch, jump_addr);
@@ -523,19 +502,8 @@ bool Jitter::inst_beq(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -570,19 +538,8 @@ bool Jitter::inst_bne(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -600,14 +557,8 @@ bool Jitter::inst_jr(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(builder.getInt32(pc), jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, jump_addr,
-			        builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(builder.getInt32(pc), jump_addr))
+		return true;
 
 	// Generate indirect branch and finish compilation
 	vm_exit(ExitInfo::ExitReason::IndirectBranch, jump_addr);
@@ -781,19 +732,8 @@ bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -815,20 +755,8 @@ bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -887,19 +815,8 @@ bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -952,14 +869,8 @@ bool Jitter::inst_jal(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId,
-					builder.getInt32(jump_addr), builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr))
+		return true;
 
 	if (END_COMPILING_ON_CALLS){
 		// This jump is a call: finish compilation
@@ -1245,14 +1156,8 @@ bool Jitter::inst_j(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId,
-					builder.getInt32(jump_addr), builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr))
+		return true;
 
 	// This jump is a call: finish compilation.
 	if (END_COMPILING_ON_CALLS){
@@ -1264,7 +1169,7 @@ bool Jitter::inst_j(vaddr_t pc, uint32_t val){
 
 		builder.Insert(llvm::BranchInst::Create(true_block));
 	}
-	
+
 	return true;
 }
 
@@ -1299,19 +1204,8 @@ bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);
@@ -1688,19 +1582,8 @@ bool Jitter::inst_bc1(vaddr_t pc, uint32_t val){
 	handle_inst(pc);
 
 	// Record coverage
-	if (options.coverage){
-		llvm::Value* cov_id = add_coverage(pc, jump_addr, pc+4, cmp);
-		if (DBG_CHECK_REPEATED_COV_ID){
-			llvm::Value* reenter_pc = builder.CreateSelect(
-				cmp,
-				builder.getInt32(jump_addr),
-				builder.getInt32(pc+4)
-			);
-			vm_exit(ExitInfo::ExitReason::CheckRepCovId, reenter_pc,
-					builder.getInt32(pc), cov_id);
-			return true;
-		}
-	}
+	if (add_coverage(pc, jump_addr, pc+4, cmp))
+		return true;
 
 	// Create both blocks, branch and finish compilation
 	llvm::BasicBlock* true_block  = create_block(jump_addr);

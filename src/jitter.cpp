@@ -585,9 +585,12 @@ uint32_t Jitter::get_new_cov_id(size_t cov_map_size){
 	return ret;
 }
 
-llvm::Value* Jitter::add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
-                                  llvm::Value* cmp)
+bool Jitter::add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
+                          llvm::Value* cmp)
 {
+	if (!options.coverage)
+		return false;
+
 	// Conditional branches version
 	if (UNIQUE_COV_ID_ATTEMPT){
 		// Get coverage ids for this branch
@@ -602,7 +605,20 @@ llvm::Value* Jitter::add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
 			builder.getInt32(cov_ids[pc].first),
 			builder.getInt32(cov_ids[pc].second)
 		);
-		return add_coverage(cov_id);
+
+		// If we must check repeated cov ids, get jump address. If not, we don't
+		// need to calculate it as it won't be used
+		llvm::Value* to;
+		if (DBG_CHECK_REPEATED_COV_ID){
+			to = builder.CreateSelect(
+				cmp,
+				builder.getInt32(jump1),
+				builder.getInt32(jump2)
+			);
+		} else
+			to = builder.getInt32(0);
+
+		return add_coverage(cov_id, builder.getInt32(pc), to);
 
 	} else {
 		// Branch hash
@@ -615,13 +631,17 @@ llvm::Value* Jitter::add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
 	}
 }
 
-llvm::Value* Jitter::add_coverage(vaddr_t pc, vaddr_t jump){
+bool Jitter::add_coverage(vaddr_t pc, vaddr_t jump){
+	if (!options.coverage)
+		return false;
+
 	// Unconditional branches version
 	if (UNIQUE_COV_ID_ATTEMPT){
 		// Get coverage id for this branch
 		if (!cov_ids.count(pc))
 			cov_ids[pc].first = get_new_cov_id(cov_map_size);
-		return add_coverage(builder.getInt32(cov_ids[pc].first));
+		return add_coverage(builder.getInt32(cov_ids[pc].first),
+		                    builder.getInt32(pc), builder.getInt32(jump));
 
 	} else {
 		// Branch hash
@@ -629,7 +649,10 @@ llvm::Value* Jitter::add_coverage(vaddr_t pc, vaddr_t jump){
 	}
 }
 
-llvm::Value* Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
+bool Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
+	if (!options.coverage)
+		return false;
+
 	// Indirect branches version
 	// Compute branch hash. When `from` and `to` are constants, this will be
 	// translated to a constant (for example in bal). Particularly, `from` is
@@ -642,10 +665,15 @@ llvm::Value* Jitter::add_coverage(llvm::Value* from, llvm::Value* to){
 		builder.CreateAnd(tmp4, builder.getInt32(cov_map_size-1));
 
 	// Use branch hash as coverage id
-	return add_coverage(branch_hash);
+	return add_coverage(branch_hash, from, to);
 }
 
-llvm::Value* Jitter::add_coverage(llvm::Value* cov_id){
+bool Jitter::add_coverage(llvm::Value* cov_id, llvm::Value* from,
+                          llvm::Value* to)
+{
+	if (!options.coverage)
+		return false;
+
 	// Get quotient and rest
 	llvm::Value* cov_id_q    = builder.CreateUDiv(cov_id, builder.getInt32(8));
 	llvm::Value* cov_id_r    = builder.CreateTrunc(
@@ -660,7 +688,11 @@ llvm::Value* Jitter::add_coverage(llvm::Value* cov_id){
 	llvm::Value* cov_value   = builder.CreateLoad(p_cov_value);
 	llvm::Value* new_cov_value = builder.CreateOr(cov_value, bit);
 	builder.CreateStore(new_cov_value, p_cov_value);
-	return cov_id;
+
+	if (DBG_CHECK_REPEATED_COV_ID)
+		vm_exit(ExitInfo::ExitReason::CheckRepCovId, to, from, cov_id);
+
+	return DBG_CHECK_REPEATED_COV_ID;
 }
 
 void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len){

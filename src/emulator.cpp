@@ -455,8 +455,8 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 				bp_handler_t bp  = breakpoints.get_bp(pc);
 				assert(bp);
 				(this->*bp)();
-				if (pc == pc_bf_bp)
-					die("JIT breakpoint didn't change pc\n");
+				assert(pc != pc_bf_bp);
+
 				// Update reenter_pc and report coverage
 				exit_inf.reenter_pc = pc;
 				add_coverage(cov, pc_bf_bp, pc);

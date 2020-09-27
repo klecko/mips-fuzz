@@ -15,6 +15,10 @@
 #define INTEGRATED_CALLS 0
 #define DETAILED_FAULT 0
 
+// For debugging purposes: check repeated coverage ids. This generates a vm exit
+// after each code coverage event
+#define DBG_CHECK_REPEATED_COV_ID 0
+
 const int NUM_REGS = 34;
 enum Reg {
 	zero, at, v0, v1, a0, a1, a2, a3,
@@ -223,19 +227,21 @@ private:
 
 	uint32_t get_new_cov_id(size_t cov_map_size);
 
+	// Methods for reporting code coverage. They return whether they generated
+	// a vm exit or not.
 	// For conditional branches. It gets unused coverage ids
-	llvm::Value* add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
-	                          llvm::Value* cmp);
+	bool add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
+	                  llvm::Value* cmp);
 
 	// For unconditional branches. It gets unused coverage id
-	llvm::Value* add_coverage(vaddr_t pc, vaddr_t jump);
+	bool add_coverage(vaddr_t pc, vaddr_t jump);
 
 	// For indirect branches. It generates a hash based on `from` and `to`
 	// which is used as coverage id
-	llvm::Value* add_coverage(llvm::Value* from, llvm::Value* to);
+	bool add_coverage(llvm::Value* from, llvm::Value* to);
 
 	// General method
-	llvm::Value* add_coverage(llvm::Value* cov_id);
+	bool add_coverage(llvm::Value* cov_id, llvm::Value* from, llvm::Value* to);
 
 	// Generation of memory access checks. We also generate a fault vm exit
 	// so faults are notified at runtime if any check fails.
