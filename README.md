@@ -2,6 +2,8 @@
 
 This project has the goal of fuzzing closed-source MIPS binaries, and it is greatly inspired by [gamozolabs fuzz week](https://gamozolabs.github.io/2020/07/12/fuzz_week_2020.html). I've done it with the purpose of learning about emulation and fuzzing. It is mostly useless as MIPS binaries have very low interest, but the same could be done for x86 (just with a lot more work)
 
+![gif](https://i.imgur.com/Ubf8Yh7.gif)
+
 ## What
 It emulates MIPS32 architecture, having full control over what's being executed and its environment. This allows snapshot fuzzing, code coverage, breakpoints and a custom dynamic memory allocator with byte-level permission checks to detect memory corruption bugs.
 
