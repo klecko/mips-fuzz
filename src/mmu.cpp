@@ -164,8 +164,15 @@ void Mmu::set_dirty(vaddr_t addr, vsize_t len){
 
 void Mmu::set_init(vaddr_t addr, vsize_t len){
 	vaddr_t addr_end = addr + len;
-	for (vaddr_t v = addr; v < addr_end; v++)
-		perms[v] |= PERM_INIT;
+/* 	uint64_t perm_ext = 0;
+	for (int i = 0; i < 8; i++)
+		perm_ext |= (PERM_INIT << (i*8));
+
+	for (; addr < addr_end-8; addr+=8)
+		*(uint64_t*)(perms+addr) |= perm_ext; */
+
+	for (; addr < addr_end; addr++)
+		perms[addr] |= PERM_INIT;
 }
 
 void Mmu::set_perms(vaddr_t addr, vsize_t len, uint8_t perm){
@@ -186,6 +193,17 @@ Asking for PERM_READ:
 void Mmu::check_perms(vaddr_t addr, vsize_t len, uint8_t perm) const {
 	// Check permission for each address
 	vaddr_t addr_end = addr + len;
+/* 	uint64_t perm_ext = 0;
+	for (int i = 0; i < 8; i++)
+		perm_ext |= (perm << (i*8));
+
+	for (; addr < addr_end-8; addr+=8){
+		if ((*(uint64_t*)(perms+addr) & perm_ext) != perm_ext){
+			// Permission error. Determine which
+			break; // rely on the other loop
+		}
+	}
+ */
 	for (; addr < addr_end; addr++){
 		if ((perms[addr] & perm) != perm){ 
 			// Permission error. Determine which

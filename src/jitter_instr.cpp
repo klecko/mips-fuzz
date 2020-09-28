@@ -399,7 +399,7 @@ bool Jitter::inst_or(vaddr_t pc, uint32_t val){
 bool Jitter::inst_bgezal(vaddr_t pc, uint32_t val){
 	// Create cmp, set return address and handle delay slot
 	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 	llvm::Value* cmp = builder.CreateICmpSGE(
 		get_reg(inst.s),
 		builder.getInt32(0),
@@ -490,7 +490,7 @@ bool Jitter::inst_jalr(vaddr_t pc, uint32_t val){
 bool Jitter::inst_beq(vaddr_t pc, uint32_t val){
 	// Create cmp, handle delay slot
 	inst_I_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 	llvm::Value* cmp = builder.CreateICmpEQ(
 		get_reg(inst.s),
 		get_reg(inst.t),
@@ -526,7 +526,7 @@ bool Jitter::inst_sll(vaddr_t pc, uint32_t val){
 bool Jitter::inst_bne(vaddr_t pc, uint32_t val){
 	// Create cmp, handle delay slot
 	inst_I_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 	llvm::Value* cmp = builder.CreateICmpNE(
 		get_reg(inst.s),
 		get_reg(inst.t),
@@ -720,7 +720,7 @@ bool Jitter::inst_mul(vaddr_t pc, uint32_t val){
 bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
 	// Create cmp, handle delay slot
 	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 	llvm::Value* cmp = builder.CreateICmpSLT(
 		get_reg(inst.s),
 		llvm::ConstantInt::get(int32_ty, 0, true),
@@ -743,7 +743,7 @@ bool Jitter::inst_bltz(vaddr_t pc, uint32_t val){
 bool Jitter::inst_blez(vaddr_t pc, uint32_t val){
 	// Create cmp, handle delay slot
 	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 	llvm::Value* cmp = builder.CreateICmpSLE(
 		get_reg(inst.s),
 		llvm::ConstantInt::get(int32_ty, 0, true),
@@ -803,7 +803,7 @@ bool Jitter::inst_rdhwr(vaddr_t pc, uint32_t val){
 bool Jitter::inst_bgez(vaddr_t pc, uint32_t val){
 	// Create cmp, handle delay slot
 	inst_RI_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 	llvm::Value* cmp = builder.CreateICmpSGE(
 		get_reg(inst.s),
 		builder.getInt32(0),
@@ -979,16 +979,19 @@ bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
+	llvm::Value* offset = builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	// Store pc just in case there's a fault
+	// This is the same as in `read_mem`
 	if (DETAILED_FAULT)
 		builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
-
 	check_bounds_mem(addr_align, 4);
-	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
+	uint8_t perm = Mmu::PERM_READ;
+	if (CHECK_UNINIT)
+		perm |= Mmu::PERM_INIT;
+	check_perms_mem(addr_align, 4, perm);
+
+	// Perform memcpy
 	llvm::Value* p_mem = get_pmemory(addr_align);
 	llvm::Value* p_reg = get_preg(inst.t);
 	builder.CreateMemCpy(
@@ -996,7 +999,7 @@ bool Jitter::inst_lwl(vaddr_t pc, uint32_t val){
 			builder.CreateBitCast(p_reg, int8ptr_ty),
 			builder.CreateSub(builder.getInt32(3), offset)),
 		4,     // dst align
-		p_mem, // src 
+		p_mem, // src
 		1,     // src align
 		builder.CreateAdd(offset, builder.getInt32(1))
 	);
@@ -1007,23 +1010,27 @@ bool Jitter::inst_lwr(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
+	llvm::Value* offset = builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	// Store pc just in case there's a fault
+	// This is the same as in `read_mem`. We use addr_align despite reading from
+	// addr because we don't know the length of the read at compile time, so we
+	// just check everything on the whole aligned word.
 	if (DETAILED_FAULT)
 		builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
-
 	check_bounds_mem(addr_align, 4);
-	check_perms_mem (addr_align, 4, Mmu::PERM_READ);
-	llvm::Value* p_mem = get_pmemory(addr_align);
+	uint8_t perm = Mmu::PERM_READ;
+	if (CHECK_UNINIT)
+		perm |= Mmu::PERM_INIT;
+	check_perms_mem(addr_align, 4, perm);
+
+	// Perform memcpy
+	llvm::Value* p_mem = get_pmemory(addr);
 	llvm::Value* p_reg = get_preg(inst.t);
 	builder.CreateMemCpy(
 		p_reg, // dst
 		4,     // dst align
-		builder.CreateInBoundsGEP(builder.CreateBitCast(p_mem, int8ptr_ty), 
-		                          offset), 
+		p_mem, // src
 		1,     // src align
 		builder.CreateSub(builder.getInt32(4), offset)
 	);
@@ -1050,16 +1057,19 @@ bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
+	llvm::Value* offset = builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
-	// Store pc just in case there's a fault
+	// This is the same as in `write_mem`
 	if (DETAILED_FAULT)
 		builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
-
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
+	if (CHECK_UNINIT)
+		set_init(addr_align, 4);
+	set_dirty_mem(addr_align); // we're writing to addr_align
+
+	// Perform memcpy
 	llvm::Value* p_mem = get_pmemory(addr_align);
 	llvm::Value* p_reg = get_preg(inst.t);
 	builder.CreateMemCpy(
@@ -1067,7 +1077,8 @@ bool Jitter::inst_swl(vaddr_t pc, uint32_t val){
 		4,     // dst align
 		builder.CreateInBoundsGEP(
 			builder.CreateBitCast(p_reg, int8ptr_ty),
-			builder.CreateSub(builder.getInt32(3), offset)), 
+			builder.CreateSub(builder.getInt32(3), offset)
+		),     // src
 		1,     // src align
 		builder.CreateAdd(offset, builder.getInt32(1))
 	);
@@ -1079,8 +1090,7 @@ bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	llvm::Value* offs = llvm::ConstantInt::get(int32_ty, (int16_t)inst.C, true);
 	llvm::Value* addr = builder.CreateAdd(get_reg(inst.s), offs, "addr");
-	llvm::Value* offset =
-		builder.CreateAnd(addr, builder.getInt32(3));
+	llvm::Value* offset = builder.CreateAnd(addr, builder.getInt32(3));
 	llvm::Value* addr_align = builder.CreateSub(addr, offset);
 
 	// Instead of reading the reg, reading the value from memory, moving part of
@@ -1088,17 +1098,22 @@ bool Jitter::inst_swr(vaddr_t pc, uint32_t val){
 	// memory. Some repeated code but I think it's worth it
 	// TODO: NOT SETTING DIRTY??
 
-	// Store pc just in case there's a fault
+	// This is the same as in `write_mem`. We use addr_align despite writing to
+	// addr because we don't know the length of the write at compile time, so we
+	// just check everything on the whole aligned word.
 	if (DETAILED_FAULT)
 		builder.CreateStore(builder.getInt32(pc-4), p_fault_pc);
-
 	check_bounds_mem(addr_align, 4);
 	check_perms_mem (addr_align, 4, Mmu::PERM_WRITE);
-	llvm::Value* p_mem = get_pmemory(addr_align);
+	if (CHECK_UNINIT)
+		set_init(addr_align, 4);
+	set_dirty_mem(addr); // we're writing to addr
+
+	// Perform memcpy
+	llvm::Value* p_mem = get_pmemory(addr);
 	llvm::Value* p_reg = get_preg(inst.t);
  	builder.CreateMemCpy(
-		builder.CreateInBoundsGEP(builder.CreateBitCast(p_mem, int8ptr_ty),
-		                          offset), // dst
+		p_mem, // dst
 		1,     // dst align
 		p_reg, // src
 		4,     // src align
@@ -1189,7 +1204,7 @@ bool Jitter::inst_sync(vaddr_t pc, uint32_t val){
 bool Jitter::inst_bgtz(vaddr_t pc, uint32_t val){
 	// Create cmp, handle delay slot
 	inst_I_t inst(val);
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 	llvm::Value* cmp = builder.CreateICmpSGT(
 		get_reg(inst.s),
 		builder.getInt32(0),
@@ -1355,6 +1370,8 @@ bool Jitter::inst_fmt_s(vaddr_t pc, uint32_t val){
 		case 0b000001: // sub.s
 			sets_reg(inst.d,
 			         builder.CreateFSub(gets_reg(inst.s), gets_reg(inst.t)));
+			break; // Once, this break didn't exist. This comment is here just
+			// to pay respect for those hours spent debugging. F.
 		case 0b000010: // mul.s
 			sets_reg(inst.d,
 			         builder.CreateFMul(gets_reg(inst.s), gets_reg(inst.t)));
@@ -1569,7 +1586,7 @@ bool Jitter::inst_bc1(vaddr_t pc, uint32_t val){
 	inst_I_t inst(val);
 	bool jump_if_true = inst.t & 1;
 	uint8_t cc = (inst.t >> 2) & 0b111;
-	vaddr_t jump_addr = pc + ((int16_t)inst.C << 2);
+	vaddr_t jump_addr = pc + ((int16_t)inst.C * 4);
 
 	llvm::Value* cond = get_cc(cc);
 	llvm::Value* cmp  = (jump_if_true ? cond : builder.CreateNot(cond));

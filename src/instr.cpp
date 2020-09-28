@@ -412,7 +412,7 @@ void Emulator::inst_bgezal(uint32_t val){
 	inst_RI_t inst(val);
 	regs[Reg::ra]  = pc + 4; // Instruction after the delay slot
 	condition = ((int32_t)get_reg(inst.s) >= 0);
-	jump_addr = pc + ((int16_t)inst.C << 2);
+	jump_addr = pc + ((int16_t)inst.C * 4);
 	rec_cov   = true;
 }
 
@@ -456,7 +456,7 @@ void Emulator::inst_jalr(uint32_t val){
 void Emulator::inst_beq(uint32_t val){
 	inst_I_t inst(val);
 	condition = (get_reg(inst.s) == get_reg(inst.t));
-	jump_addr = pc + ((int16_t)inst.C << 2);
+	jump_addr = pc + ((int16_t)inst.C * 4);
 	rec_cov   = true;
 }
 
@@ -473,7 +473,7 @@ void Emulator::inst_sll(uint32_t val){
 void Emulator::inst_bne(uint32_t val){
 	inst_I_t inst(val);
 	condition = (get_reg(inst.s) != get_reg(inst.t));
-	jump_addr = pc + ((int16_t)inst.C << 2);
+	jump_addr = pc + ((int16_t)inst.C * 4);
 	rec_cov   = true;
 }
 
@@ -562,14 +562,14 @@ void Emulator::inst_mul(uint32_t val){
 void Emulator::inst_bltz(uint32_t val){
 	inst_RI_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) < 0);
-	jump_addr = pc + ((int16_t)inst.C << 2);
+	jump_addr = pc + ((int16_t)inst.C * 4);
 	rec_cov   = true;
 }
 
 void Emulator::inst_blez(uint32_t val){
 	inst_I_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) <= 0);
-	jump_addr = pc + ((int16_t)inst.C << 2);
+	jump_addr = pc + ((int16_t)inst.C * 4);
 	rec_cov   = true;
 }
 
@@ -581,7 +581,7 @@ void Emulator::inst_rdhwr(uint32_t val){
 void Emulator::inst_bgez(uint32_t val){
 	inst_RI_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) >= 0);
-	jump_addr = pc + ((int16_t)inst.C << 2);
+	jump_addr = pc + ((int16_t)inst.C * 4);
 	rec_cov   = true;
 }
 
@@ -819,7 +819,7 @@ void Emulator::inst_sync(uint32_t val){
 void Emulator::inst_bgtz(uint32_t val){
 	inst_I_t inst(val);
 	condition = ((int32_t)get_reg(inst.s) > 0);
-	jump_addr = pc + ((int16_t)inst.C << 2);
+	jump_addr = pc + ((int16_t)inst.C * 4);
 	rec_cov   = true;
 }
 
@@ -1094,7 +1094,7 @@ void Emulator::inst_bc1(uint32_t val){
 	bool jump_if_true = inst.t & 1;
 	uint8_t cc = (inst.t >> 2) & 0b111;
 	condition  = (jump_if_true ? get_cc(cc) : !get_cc(cc));
-	jump_addr  = pc + ((int16_t)inst.C << 2);
+	jump_addr  = pc + ((int16_t)inst.C * 4);
 	rec_cov    = true;
 }
 

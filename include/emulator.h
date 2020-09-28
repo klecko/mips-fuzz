@@ -69,7 +69,7 @@ public:
 	friend std::ostream& operator<<(std::ostream& os, const Emulator& emu);
 
 private:
-	static const uint64_t INSTR_TIMEOUT = 100000000;
+	static const uint64_t INSTR_TIMEOUT = 20000000;
 
 	// Interpreter instruction handler
 	typedef void (Emulator::*const inst_handler_t)(uint32_t);

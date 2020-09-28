@@ -1116,7 +1116,7 @@ void Emulator::dump(bool dump_pc, bool dump_regs) const {
 }
 
 void Emulator::dump_os(ostream& os, bool dump_pc, bool dump_regs) const {
-	os << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
+	os << hex << setfill('0') << fixed << showpoint << setprecision(3);
 	if (dump_pc){
 		os << "PC:  " << setw(8) << pc << endl;
 	}
@@ -1128,6 +1128,13 @@ void Emulator::dump_os(ostream& os, bool dump_pc, bool dump_regs) const {
 				os << endl;
 		}
 		os << "$hi: " << setw(8) << hi << "\t$lo: " << setw(8) << lo << endl;
+
+		os << dec;
+		for (int i = 0; i < NUM_REGS; i++){
+			os << "$f" << setw(2) << i << ": " << fpregs[i] << "\t";
+			if ((i+1)%8 == 0)
+				os << endl;
+		}
 		os << endl;
 	}
 	os << dec;
