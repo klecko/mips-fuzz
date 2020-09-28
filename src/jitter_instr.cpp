@@ -11,9 +11,6 @@ using namespace JIT;
 // greatly increased compilation time.
 #define END_COMPILING_ON_CALLS 1
 
-// Enable code coverage
-#define COVERAGE 1
-
 // Helpers for FPU instructions
 #define as_u32(value) builder.CreateBitCast(value, int32_ty)
 #define as_float(value) builder.CreateBitCast(value, float_ty)
