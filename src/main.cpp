@@ -173,6 +173,11 @@ int main(){
 
 	emu.options.guest_output = false;
 	emu.options.coverage     = true;
+	emu.options.dump_pc      = false;
+	emu.options.dump_regs    = false;
+
+	/* emu.run_file("../test_bins/test/crash");
+	die("end\n"); */
 
 	// Run until open before forking
 	// test:       0x00423e8c | 0x41d6e4 | 0x00423e7c

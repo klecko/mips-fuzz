@@ -77,14 +77,14 @@ private:
 	// Memory
 	Mmu mmu;
 
-	// Registers. JIT assumes `hi` and `lo` are just after `regs`
-	uint32_t  regs[32];
+	// Registers. JIT assumes `hi`, `lo` and `pc` are just after `regs`
+	uint32_t  regs[NUM_REGS];
 	uint32_t  hi, lo;
 	vaddr_t   pc;
 	vaddr_t   prev_pc;
 
 	// FPU registers and condition codes
-	float     fpregs[32];
+	float     fpregs[NUM_REGS];
 	uint8_t   ccs;
 
 	// Handling of branches. If condition is true, pc must be updated to
@@ -139,6 +139,9 @@ private:
 	void calloc_bp();   // __calloc
 	void memcpy_bp();   // memcpy
 	void memset_bp();   // memset
+	void strcmp_bp();   // strcmp
+	void strlen_bp();   // strlen
+	void strnlen_bp();  // strnlen
 
 	// Syscalls
 	uint32_t sys_brk(vaddr_t new_brk, uint32_t& error);
@@ -188,7 +191,8 @@ private:
 	void run_jit(const std::string& input, cov_t& cov, 
 	             JIT::jit_cache_t& jit_cache, Stats& local_stats);
 
-	void dump(std::ostream& os, bool dump_pc, bool dump_regs) const;
+	void dump(bool dump_pc, bool dump_regs) const;
+	void dump_os(std::ostream& os, bool dump_pc, bool dump_regs) const;
 
 	// Instruction handlers
 	static const inst_handler_t inst_handlers[];

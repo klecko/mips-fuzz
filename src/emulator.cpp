@@ -60,33 +60,33 @@ vsize_t Emulator::memsize() const {
 }
 
 void Emulator::set_reg(uint8_t reg, uint32_t val){
-	assert(0 <= reg && reg <= 31);
+	assert(0 <= reg && reg < NUM_REGS);
 	if (reg != 0)
 		regs[reg] = val;
 }
 
 uint32_t Emulator::get_reg(uint8_t reg) const {
-	assert(0 <= reg && reg <= 31);
+	assert(0 <= reg && reg < NUM_REGS);
 	return (reg ? regs[reg] : 0);
 }
 
 void Emulator::sets_reg(uint8_t reg, float val){
-	assert(0 <= reg && reg <= 31);
+	assert(0 <= reg && reg < NUM_REGS);
 	fpregs[reg] = val;
 }
 
 void Emulator::setd_reg(uint8_t reg, double val){
-	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
+	assert(0 <= reg && reg < NUM_REGS && (reg%2 == 0));
 	*(double*)(fpregs+reg) = val;
 }
 
 float Emulator::gets_reg(uint8_t reg) const{
-	assert(0 <= reg && reg <= 31);
+	assert(0 <= reg && reg < NUM_REGS);
 	return fpregs[reg];
 }
 
 double Emulator::getd_reg(uint8_t reg) const{
-	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
+	assert(0 <= reg && reg < NUM_REGS && (reg%2 == 0));
 	return *(double*)(fpregs+reg);
 }
 
@@ -212,7 +212,10 @@ void Emulator::set_bps(){
 	breakpoints.set_bp_sym("__calloc", &Emulator::calloc_bp, true);
 	breakpoints.set_bp_sym("memcpy", &Emulator::memcpy_bp, true);
 	breakpoints.set_bp_sym("memset", &Emulator::memset_bp, true);
-	//breakpoints.set_bp_addr("test", 0x413e04, &Emulator::test_bp, false);
+	/* breakpoints.set_bp_sym("strcmp", &Emulator::strcmp_bp, true);
+	breakpoints.set_bp_sym("strlen", &Emulator::strlen_bp, true);
+	breakpoints.set_bp_sym("strnlen", &Emulator::strnlen_bp, true); */
+	//breakpoints.set_bp_addr("test", 0x400964, &Emulator::test_bp, false);
 }
 
 void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
@@ -289,7 +292,7 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	local_stats.bp_cycles += rdtsc2() - cycles;
 
 	if (options.dump_pc || options.dump_regs)
-		dump(cout, options.dump_pc, options.dump_regs);
+		dump(options.dump_pc, options.dump_regs);
 
 	// Fetch current instruction
 	cycles = rdtsc2();
@@ -342,34 +345,6 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 	}
 }
 
-const char* regs_map[] = {
-	"00",  "at", "v0", "v1",
-	"a0", "a1", "a2", "a3",
-	"t0", "t1", "t2", "t3",
-	"t4", "t5", "t6", "t7",
-	"s0", "s1", "s2", "s3",
-	"s4", "s5", "s6", "s7",
-	"t8", "t9", "k0", "k1",
-	"gp", "sp", "fp", "ra",
-	"hi", "lo"
-};
-
-void dump_regs(uint32_t regs_state[][35], uint32_t n, bool all_regs){
-	for (uint32_t h = 0; h < n; h++){
-		cout << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
-		cout << "PC:  " << setw(8) << regs_state[h][NUM_REGS] << endl;
-		if (all_regs){
-			for (int i = 0; i < NUM_REGS; i++){
-				cout << "$" << regs_map[i] << ": " << setw(8)
-						<< regs_state[h][i] << "\t";
-				if ((i+1)%8 == 0)
-					cout << endl;
-			}
-		}
-		//cout << endl << endl;
-	}
-}
-
 void Emulator::run_jit(const string& input, cov_t& cov, 
                        JIT::jit_cache_t& jit_cache, Stats& local_stats)
 {
@@ -391,9 +366,6 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 	};
 	JIT::ExitInfo exit_inf;
 	uint8_t* cov_map = cov.data();
-	uint32_t regs_state_sz =
-		(options.dump_pc || options.dump_regs ? options.max_dump : 1);
-	uint32_t regs_state[regs_state_sz][35];
 	uint32_t ret;
 
 	// Number of instructions executed in current run
@@ -410,13 +382,14 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 			jit_block = JIT::Jitter(pc, mmu, cov.size()*8, breakpoints, {
 				{"handle_syscall", (void*)&Emulator::handle_syscall},
 				{"handle_rdhwr",   (void*)&Emulator::handle_rdhwr},
+				{"dump",           (void*)&Emulator::dump}
 			}, options).get_result();
 			jit_cache[pc/4] = jit_block;
 		}
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
 		cycles = rdtsc2(); // vm_cycles
-		ret    = jit_block(&state, &exit_inf, cov_map, this, regs_state);
+		ret    = jit_block(&state, &exit_inf, cov_map, this);
 		local_stats.instr += ret;
 		instr_exec        += ret;
 		local_stats.vm_cycles += rdtsc2() - cycles;
@@ -478,10 +451,6 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 		if (instr_exec >= INSTR_TIMEOUT)
 			throw RunTimeout();
 
-		// DUMP REGS
-		if (options.dump_pc || options.dump_regs){
-			dump_regs(regs_state, ret, options.dump_regs);
-		}
 		pc = exit_inf.reenter_pc;
 		prev_pc = pc; // not sure about this, we'll see
 	}
@@ -502,7 +471,7 @@ void Emulator::run_file(const std::string& filepath){
 	try {
 		run(ss.str(), dummy1, dummy2);
 	} catch (const Fault& f){
-		cout << "[PC: 0x" << hex << pc << "] " << f << endl;
+		cout << "[PC: 0x" << hex << prev_pc << "] " << f << endl;
 	} catch (const RunTimeout& t){
 		cout << "TIMEOUT" << endl;
 	}
@@ -629,6 +598,39 @@ void Emulator::memset_bp(){
 	prev_pc = pc;
 	pc      = regs[Reg::ra];
 	dbgprintf("memset(0x%X, %X, %u)\n", dst, (uint32_t)c, len);
+}
+
+void Emulator::strcmp_bp(){
+	vaddr_t s1 = regs[Reg::a0];
+	vaddr_t s2 = regs[Reg::a1];
+	uint8_t c1 = mmu.read<uint8_t>(s1);
+	uint8_t c2 = mmu.read<uint8_t>(s2);
+	while (c1 && (c1 == c2)){
+		c1 = mmu.read<uint8_t>(++s1);
+		c2 = mmu.read<uint8_t>(++s2);
+	}
+	regs[Reg::v0] = c1 - c2;
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
+}
+
+void Emulator::strlen_bp(){
+	vaddr_t s = regs[Reg::a0];
+	vsize_t result = 0;
+	while (mmu.read<char>(s + result)) result++;
+	regs[Reg::v0] = result;
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
+}
+
+void Emulator::strnlen_bp(){
+	vaddr_t s = regs[Reg::a0];
+	vsize_t maxlen = regs[Reg::a1];
+	vsize_t result = 0;
+	while (mmu.read<char>(s + result) && (result < maxlen)) result++;
+	regs[Reg::v0] = result;
+	prev_pc = pc;
+	pc      = regs[Reg::ra];
 }
 
 uint32_t Emulator::sys_brk(vaddr_t new_brk, uint32_t& error){
@@ -1096,14 +1098,31 @@ void Emulator::handle_rdhwr(uint8_t hwr, uint8_t reg){
 	set_reg(reg, result);
 }
 
-void Emulator::dump(ostream& os, bool dump_pc, bool dump_regs) const {
+
+const char* regs_map[] = {
+	"00",  "at", "v0", "v1",
+	"a0", "a1", "a2", "a3",
+	"t0", "t1", "t2", "t3",
+	"t4", "t5", "t6", "t7",
+	"s0", "s1", "s2", "s3",
+	"s4", "s5", "s6", "s7",
+	"t8", "t9", "k0", "k1",
+	"gp", "sp", "fp", "ra",
+	"hi", "lo"
+};
+
+void Emulator::dump(bool dump_pc, bool dump_regs) const {
+	dump_os(cout, dump_pc, dump_regs);
+}
+
+void Emulator::dump_os(ostream& os, bool dump_pc, bool dump_regs) const {
 	os << hex << setfill('0') << fixed << showpoint;// << setprecision(3);
 	if (dump_pc){
 		os << "PC:  " << setw(8) << pc << endl;
 	}
 
 	if (dump_regs){
-		for (int i = 0; i < NUM_REGS-2; i++){
+		for (int i = 0; i < NUM_REGS; i++){
 			os << "$" << regs_map[i] << ": " << setw(8) << regs[i] << "\t";
 			if ((i+1)%8 == 0)
 				os << endl;
@@ -1115,6 +1134,6 @@ void Emulator::dump(ostream& os, bool dump_pc, bool dump_regs) const {
 }
 
 ostream& operator<<(ostream& os, const Emulator& emu){
-	emu.dump(os, true, true);
+	emu.dump_os(os, true, true);
 	return os;
 }

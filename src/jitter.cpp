@@ -131,7 +131,6 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 			p_exit_info_ty, // p_exit_info
 			int8ptr_ty,     // cov_map
 			int8ptr_ty,     // p_emu
-			int32ptr_ty,    // regs_dump
 		},
 		false               // varargs
 	);
@@ -165,7 +164,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 
 	if (TMP_REGS){
 		// Allocate stack for each reg
-		for (int i = 0; i < NUM_REGS; i++)
+		for (int i = 0; i < NUM_REGS+3; i++)
 			p_regs[i] = builder.CreateAlloca(int32_ty);
 	}
 
@@ -390,8 +389,7 @@ llvm::Value* Jitter::get_state_field(uint8_t field, const string& name){
 }
 
 llvm::Value* Jitter::get_preg(uint8_t reg){
-	// Get pointer to regs[reg]
-	assert(1 <= reg && reg <= 33); // 0 is reg zero
+	// Get pointer to regs[reg]. No checks, be careful!
 	llvm::Value* p_reg;
 	if (TMP_REGS){
 		p_reg = p_regs[reg];
@@ -406,7 +404,7 @@ llvm::Value* Jitter::get_preg(uint8_t reg){
 }
 
 llvm::Value* Jitter::gets_preg(uint8_t reg){
-	assert(0 <= reg && reg <= 31);
+	// Get pointer to fpregs[reg] as float. No checks, be careful!
 	llvm::Value* p_fpreg = builder.CreateInBoundsGEP(
 		state.p_fpregs,
 		builder.getInt32(reg),
@@ -416,14 +414,14 @@ llvm::Value* Jitter::gets_preg(uint8_t reg){
 }
 
 llvm::Value* Jitter::getd_preg(uint8_t reg){
-	assert(0 <= reg && reg <= 31 && (reg%2 == 0));
+	// Get pointer to fpregs[reg] as double. No checks, be careful!
 	llvm::Value* p_fpreg = gets_preg(reg);
 	return builder.CreateBitCast(p_fpreg, doubleptr_ty);
 }
 
 llvm::Value* Jitter::get_reg(uint8_t reg){
-	// Get pointer to reg and load it
-	assert(0 <= reg && reg <= 33);
+	// Get pointer to reg and load it. Allow getting hi, lo and pc too (+3).
+	assert(0 <= reg && reg < NUM_REGS+3);
 	llvm::Value* reg_val;
 	if (reg == 0)
 		reg_val = builder.getInt32(0);
@@ -436,8 +434,8 @@ llvm::Value* Jitter::get_reg(uint8_t reg){
 }
 
 void Jitter::set_reg(uint8_t reg, llvm::Value* val){
-	// Get pointer to reg and write zero extended val
-	assert(0 <= reg && reg <= 33);
+	// Get pointer to reg and write val. Allow setting hi, lo and pc too (+3).
+	assert(0 <= reg && reg < NUM_REGS+3);
 	llvm::Value* val_zext = builder.CreateZExt(val, int32_ty);
 	if (reg != 0){
 		llvm::Value* p_reg = get_preg(reg);
@@ -903,13 +901,13 @@ void Jitter::save_reg(uint8_t reg){
 }
 
 void Jitter::load_regs(){
-	for (int i = 0; i < NUM_REGS; i++)
+	for (int i = 0; i < NUM_REGS+3; i++)
 		if (must_be_loaded[i])
 			load_reg(i);
 }
 
 void Jitter::save_regs(){
-	for (int i = 0; i < NUM_REGS; i++)
+	for (int i = 0; i < NUM_REGS+3; i++)
 		if (must_be_saved[builder.GetInsertBlock()][i])
 			save_reg(i);
 }
@@ -918,7 +916,7 @@ void Jitter::save_regs(){
 // If block == succ, add dirty registers of `block` to all of its successors
 void Jitter::join_must_be_saved(llvm::BasicBlock* block, llvm::BasicBlock* succ){
 	// Join block dirty registers to succ dirty registers
-	for (int i = 0; i < NUM_REGS; i++)
+	for (int i = 0; i < NUM_REGS+3; i++)
 		if (must_be_saved[block][i])
 			must_be_saved[succ][i] = true;
 
@@ -1015,20 +1013,29 @@ llvm::BasicBlock* Jitter::create_block(vaddr_t pc){
 bool Jitter::handle_inst(vaddr_t pc){
 	// Log state
 	if (options.dump_pc || options.dump_regs){
-		llvm::Value* num_inst = builder.CreateLoad(p_instr);
-		llvm::Value* i_dump = builder.CreateMul(num_inst, builder.getInt32(35));
-		llvm::Value* regs_dump = &function->arg_begin()[3];
-		llvm::Value* reg_dump  = builder.CreateInBoundsGEP(regs_dump, i_dump);
-		if (options.dump_regs){
-			for (int i = 0; i < NUM_REGS; i++){
-				llvm::Value* p_reg =
-					builder.CreateInBoundsGEP(reg_dump, builder.getInt32(i));
-				builder.CreateStore(get_reg(i), p_reg);
-			}
-		}
-		llvm::Value* p_reg =
-			builder.CreateInBoundsGEP(reg_dump, builder.getInt32(NUM_REGS));
-		builder.CreateStore(builder.getInt32(pc), p_reg);
+		// Pc must be updated
+		set_reg(Reg::pc, builder.getInt32(pc));
+
+		// Get dump function
+		llvm::FunctionType* dump_ty = llvm::FunctionType::get(
+			void_ty,
+			{
+				int8ptr_ty, // pointer to emulator
+				int8_ty,    // dump_pc
+				int8_ty,    // dump_regs
+			},
+			false
+		);
+		llvm::FunctionCallee dump_func =
+			module.getOrInsertFunction("dump", dump_ty);
+
+		// Call dump function
+		llvm::Value* emu_ptr = &function->arg_begin()[3];
+		builder.CreateCall(dump_func, {
+			emu_ptr,
+			builder.getInt8(options.dump_pc),
+			builder.getInt8(options.dump_regs)
+		});
 	}
 
 	// Increment instruction count

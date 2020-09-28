@@ -19,13 +19,14 @@
 // after each code coverage event
 #define DBG_CHECK_REPEATED_COV_ID 0
 
-const int NUM_REGS = 34;
+// Jitter will use hacky registers, so it will use NUM_REGS+3
+const int NUM_REGS = 32;
 enum Reg {
 	zero, at, v0, v1, a0, a1, a2, a3,
 	t0,   t1, t2, t3, t4, t5, t6, t7,
 	s0,   s1, s2, s3, s4, s5, s6, s7,
 	t8,   t9, k0, k1, gp, sp, fp, ra,
-	hi,   lo,
+	hi,   lo, pc // hacky registers
 };
 
 struct EmuOptions {
@@ -33,7 +34,6 @@ struct EmuOptions {
 	bool     coverage     = true;
 	bool     dump_pc      = false;
 	bool     dump_regs    = false;
-	uint32_t max_dump     = 20000;
 };
 
 namespace JIT {
@@ -81,8 +81,7 @@ typedef uint32_t (*jit_block_t)(
 	VmState*  p_vm_state,
 	ExitInfo* p_exit_info,
 	uint8_t*  cov_map,
-	const Emulator* p_emu,
-	uint32_t  regs_dump[][35]
+	Emulator* p_emu // pointer to emu so we can call its methods
 );
 
 // Type used for storing already compiled JIT blocks.
