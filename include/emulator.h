@@ -187,8 +187,12 @@ private:
 	void run_interpreter(const std::string& input, cov_t& cov,
 	                     Stats& local_stats);
 
+	// Get JIT block associated with given pc
+	JIT::jit_block_t get_jit_block(vaddr_t pc, JIT::jit_cache_t& jit_cache,
+	                               size_t cov_map_size);
+
 	// Perform run with provided input using the JIT
-	void run_jit(const std::string& input, cov_t& cov, 
+	void run_jit(const std::string& input, cov_t& cov,
 	             JIT::jit_cache_t& jit_cache, Stats& local_stats);
 
 	void dump(bool dump_pc, bool dump_regs) const;

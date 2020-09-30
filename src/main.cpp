@@ -176,7 +176,12 @@ int main(){
 	emu.options.dump_pc      = false;
 	emu.options.dump_regs    = false;
 
-	/* emu.run_file("../test_bins/test/crash");
+	// For debugging purposes: check repeated coverage ids. This generates a
+	// vm exit in the JIT after each code coverage event, and an expensive check
+	// in the interpreter
+	emu.options.check_repeated_cov_id = false;
+
+	/* emu.run_file("../corpus/input");
 	die("end\n"); */
 
 	// Run until open before forking

@@ -40,9 +40,9 @@ uint32_t load_next_cov_id(){
 	is.close();
 	return result;
 }
-uint32_t Jitter::next_cov_id = load_next_cov_id();
+uint32_t    Jitter::next_cov_id      = load_next_cov_id();
+atomic_flag Jitter::lock_next_cov_id = ATOMIC_FLAG_INIT;
 unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> Jitter::cov_ids;
-std::mutex Jitter::mutex;
 
 struct jit_init {
 	jit_init(){
@@ -61,9 +61,6 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 	context(*p_context), module(*p_module), builder(context),
 	must_be_loaded{false}, must_be_saved{false}
 {
-	// Lock global jitter mutex
-	std::lock_guard<std::mutex> lock(mutex);
-
 	static jit_init init; // thread_local?
 
 	assert(__builtin_popcount(cov_map_size) == 1);
@@ -569,6 +566,8 @@ void Jitter::vm_exit(ExitInfo::ExitReason reason, llvm::Value* reenter_pc,
 }
 
 uint32_t Jitter::get_new_cov_id(size_t cov_map_size){
+	while (lock_next_cov_id.test_and_set());
+
 	if (next_cov_id >= cov_map_size)
 		die("Out of coverage ids: %u/%lu\n", next_cov_id, cov_map_size);
 
@@ -580,6 +579,7 @@ uint32_t Jitter::get_new_cov_id(size_t cov_map_size){
 	os << next_cov_id << endl;
 	os.close();
 
+	lock_next_cov_id.clear();
 	return ret;
 }
 
@@ -607,7 +607,7 @@ bool Jitter::add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
 		// If we must check repeated cov ids, get jump address. If not, we don't
 		// need to calculate it as it won't be used
 		llvm::Value* to;
-		if (DBG_CHECK_REPEATED_COV_ID){
+		if (options.check_repeated_cov_id){
 			to = builder.CreateSelect(
 				cmp,
 				builder.getInt32(jump1),
@@ -687,10 +687,10 @@ bool Jitter::add_coverage(llvm::Value* cov_id, llvm::Value* from,
 	llvm::Value* new_cov_value = builder.CreateOr(cov_value, bit);
 	builder.CreateStore(new_cov_value, p_cov_value);
 
-	if (DBG_CHECK_REPEATED_COV_ID)
+	if (options.check_repeated_cov_id)
 		vm_exit(ExitInfo::ExitReason::CheckRepCovId, to, from, cov_id);
 
-	return DBG_CHECK_REPEATED_COV_ID;
+	return options.check_repeated_cov_id;
 }
 
 void Jitter::check_bounds_mem(llvm::Value* addr, vsize_t len){

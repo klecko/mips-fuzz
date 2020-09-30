@@ -15,10 +15,6 @@
 #define INTEGRATED_CALLS 0
 #define DETAILED_FAULT 1
 
-// For debugging purposes: check repeated coverage ids. This generates a vm exit
-// after each code coverage event
-#define DBG_CHECK_REPEATED_COV_ID 0
-
 // Jitter will use hacky registers, so it will use NUM_REGS+3
 const int NUM_REGS = 32;
 enum Reg {
@@ -30,10 +26,11 @@ enum Reg {
 };
 
 struct EmuOptions {
-	bool     guest_output = false;
-	bool     coverage     = true;
-	bool     dump_pc      = false;
-	bool     dump_regs    = false;
+	bool guest_output = false;
+	bool coverage     = true;
+	bool dump_pc      = false;
+	bool dump_regs    = false;
+	bool check_repeated_cov_id = false;
 };
 
 namespace JIT {
@@ -88,10 +85,12 @@ typedef uint32_t (*jit_block_t)(
 // We use a vector instead of an unordered_map because we need to access it
 // as fast as we can, but memory cost increases. Also, vector is thread-safe
 // as size is not being changed
-typedef std::vector<jit_block_t> jit_cache_t;
-//typedef std::unordered_map<vaddr_t, jit_block_t> jit_cache_t;
+typedef std::vector<std::atomic<jit_block_t>> jit_cache_t;
+//typedef std::unordered_map<vaddr_t, std::atomic<jit_block_t>> jit_cache_t;
 //#include "sparsehash/dense_hash_map"
 //typedef google::dense_hash_map<vaddr_t, JIT::jit_block_t> jit_cache_t;
+
+const jit_block_t JIT_BLOCK_COMPILING = (jit_block_t)1;
 
 
 class Jitter {
@@ -104,11 +103,7 @@ public:
 
 private:
 	// Jitter instruction handler
-	typedef bool (Jitter::*const inst_handler_t)(vaddr_t, uint32_t);
-
-	// LLVM doesn't seem to be thread-safe. Jitter locks this so there's only
-	// one thread jitting at a time
-	static std::mutex mutex;
+	typedef bool (Jitter::*inst_handler_t)(vaddr_t, uint32_t);
 
 	const Mmu& mmu;
 	size_t cov_map_size;
@@ -117,6 +112,7 @@ private:
 	const EmuOptions& options;
 
 	static uint32_t next_cov_id;
+	static std::atomic_flag lock_next_cov_id;
 	static std::unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> cov_ids;
 
 	std::unique_ptr<llvm::LLVMContext> p_context;

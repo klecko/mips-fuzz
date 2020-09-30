@@ -275,7 +275,8 @@ void Emulator::add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
 	cov[cov_id] = 1;
 
 	// Only for debugging
-	//check_repeated_cov_id(cov_id, from, to);
+	if (options.check_repeated_cov_id)
+		check_repeated_cov_id(cov_id, from, to);
 }
 
 void Emulator::run_inst(cov_t& cov, Stats& local_stats){
@@ -345,7 +346,46 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 	}
 }
 
-void Emulator::run_jit(const string& input, cov_t& cov, 
+inline __attribute__((always_inline))
+JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, JIT::jit_cache_t& jit_cache,
+                                         size_t cov_map_size)
+{
+	// Read block from cache
+	vaddr_t id_cache = pc/4;
+	JIT::jit_block_t jit_block = jit_cache[id_cache];
+
+	// Check if block was already compiled and is valid
+	if (jit_block && jit_block != JIT::JIT_BLOCK_COMPILING)
+		return jit_block;
+
+	// If the jit cache is empty, write JIT_BLOCK_COMPILING. Otherwise, read
+	// its value into jit_block. Do it atomically.
+	jit_block = 0;
+	if (atomic_compare_exchange_strong(&jit_cache[id_cache], &jit_block,
+	                                   JIT::JIT_BLOCK_COMPILING))
+	{
+		// Value was 0 and we wrote JIT_BLOCK_COMPILING. We must compile
+		// the block and update the cache with the result.
+		jit_block = JIT::Jitter(pc, mmu, cov_map_size, breakpoints, {
+			{"handle_syscall", (void*)&Emulator::handle_syscall},
+			{"handle_rdhwr",   (void*)&Emulator::handle_rdhwr},
+			{"dump",           (void*)&Emulator::dump}
+		}, options).get_result();
+		jit_cache[id_cache] = jit_block;
+	} else if (jit_block == JIT::JIT_BLOCK_COMPILING){
+		// Value was JIT_BLOCK_COMPILING: there's another thread compiling.
+		// Wait for it to finish and update jit_block with the result.
+		while (jit_cache[id_cache] == JIT::JIT_BLOCK_COMPILING);
+		jit_block = jit_cache[id_cache];
+	}
+
+	// The jit cache could have been updated between the first read and the
+	// second (its value in the last read is neither 0 nor JIT_BLOCK_COMPILING).
+	// In that case simply return the result.
+	return jit_block;
+}
+
+void Emulator::run_jit(const string& input, cov_t& cov,
                        JIT::jit_cache_t& jit_cache, Stats& local_stats)
 {
 	// Save provided input. Internal representation is as const char* and not
@@ -376,16 +416,8 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 	cycle_t cycles;
 	while (running){
 		// Get the JIT block and run it
-		cycles = rdtsc2(); // jit_cache_cycles
-		jit_block = jit_cache[pc/4];
-		if (!jit_block){
-			jit_block = JIT::Jitter(pc, mmu, cov.size()*8, breakpoints, {
-				{"handle_syscall", (void*)&Emulator::handle_syscall},
-				{"handle_rdhwr",   (void*)&Emulator::handle_rdhwr},
-				{"dump",           (void*)&Emulator::dump}
-			}, options).get_result();
-			jit_cache[pc/4] = jit_block;
-		}
+		cycles    = rdtsc2(); // jit_cache_cycles
+		jit_block = get_jit_block(pc, jit_cache, cov.size()*8);
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
 		cycles = rdtsc2(); // vm_cycles
