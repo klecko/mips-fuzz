@@ -25,13 +25,7 @@ enum Reg {
 	hi,   lo, pc // hacky registers
 };
 
-struct EmuOptions {
-	bool guest_output = false;
-	bool coverage     = true;
-	bool dump_pc      = false;
-	bool dump_regs    = false;
-	bool check_repeated_cov_id = false;
-};
+struct EmuOptions;
 
 namespace JIT {
 
@@ -385,5 +379,15 @@ private:
 };
 
 } // JIT namespace
+
+// This has to be after the JIT namespace :(
+struct EmuOptions {
+	JIT::jit_cache_t* jit_cache = NULL;
+	bool guest_output           = false;
+	bool coverage               = true;
+	bool dump_pc                = false;
+	bool dump_regs              = false;
+	bool check_repeated_cov_id  = false;
+};
 
 #endif

@@ -49,7 +49,6 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	running   = false;
 	input     = NULL;
 	input_sz  = 0;
-	jit_cache = NULL;
 	load_elf(argv);
 	set_bps();
 	//Jitter(0x41df90, mmu, 128*1024, breakpoints, this);
@@ -239,13 +238,9 @@ void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
 	}
 }
 
-void Emulator::enable_jit(JIT::jit_cache_t* jit_cache){
-	this->jit_cache = jit_cache;
-}
-
 void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
-	if (jit_cache)
-		run_jit(input, cov, *jit_cache, local_stats);
+	if (options.jit_cache)
+		run_jit(input, cov, local_stats);
 	else
 		run_interpreter(input, cov, local_stats);
 }
@@ -347,12 +342,11 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 }
 
 inline __attribute__((always_inline))
-JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, JIT::jit_cache_t& jit_cache,
-                                         size_t cov_map_size)
-{
+JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, size_t cov_map_size){
 	// Read block from cache
 	vaddr_t id_cache = pc/4;
-	JIT::jit_block_t jit_block = jit_cache[id_cache];
+	JIT::jit_cache_t& jit_cache = *options.jit_cache;
+	JIT::jit_block_t  jit_block = jit_cache[id_cache];
 
 	// Check if block was already compiled and is valid
 	if (jit_block && jit_block != JIT::JIT_BLOCK_COMPILING)
@@ -385,9 +379,7 @@ JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, JIT::jit_cache_t& jit_cache
 	return jit_block;
 }
 
-void Emulator::run_jit(const string& input, cov_t& cov,
-                       JIT::jit_cache_t& jit_cache, Stats& local_stats)
-{
+void Emulator::run_jit(const string& input, cov_t& cov, Stats& local_stats){
 	// Save provided input. Internal representation is as const char* and not
 	// as string so we don't have to perform any copy.
 	this->input    = input.c_str();
@@ -417,7 +409,7 @@ void Emulator::run_jit(const string& input, cov_t& cov,
 	while (running){
 		// Get the JIT block and run it
 		cycles    = rdtsc2(); // jit_cache_cycles
-		jit_block = get_jit_block(pc, jit_cache, cov.size()*8);
+		jit_block = get_jit_block(pc, cov.size()*8);
 		local_stats.jit_cache_cycles += rdtsc2() - cycles;
 
 		cycles = rdtsc2(); // vm_cycles

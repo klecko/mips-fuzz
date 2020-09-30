@@ -169,8 +169,8 @@ int main(){
 
 	JIT::jit_cache_t jit_cache(emu.memsize()/4);
 	//jit_cache.set_empty_key(0);
-	emu.enable_jit(&jit_cache);
 
+	emu.options.jit_cache    = &jit_cache;
 	emu.options.guest_output = false;
 	emu.options.coverage     = true;
 	emu.options.dump_pc      = false;

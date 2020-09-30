@@ -31,7 +31,7 @@ public:
 	// Get or set a single precission FPU register
 	float gets_reg(uint8_t reg) const;
 	void sets_reg(uint8_t reg, float val);
-	
+
 	// Get or set a double precission FPU register
 	double getd_reg(uint8_t reg) const;
 	void setd_reg(uint8_t reg, double val);
@@ -50,9 +50,6 @@ public:
 
 	// Resets the emulator to the parent it was previously forked from
 	void reset(const Emulator& other);
-
-	// Enable the JIT using given jit cache
-	void enable_jit(JIT::jit_cache_t* jit_cache);
 
 	// Run the emulator with provided input
 	void run(const std::string& input, cov_t& cov, Stats& local_stats);
@@ -115,9 +112,6 @@ private:
 
 	// Breakpoints, indexed by address
 	Breakpoints breakpoints;
-
-	// Pointer to jit cache, if any
-	JIT::jit_cache_t* jit_cache;
 
 	// Load `elf` into memory, allocate stack and set up argv and company
 	void load_elf(const std::vector<std::string>& args);
@@ -188,12 +182,10 @@ private:
 	                     Stats& local_stats);
 
 	// Get JIT block associated with given pc
-	JIT::jit_block_t get_jit_block(vaddr_t pc, JIT::jit_cache_t& jit_cache,
-	                               size_t cov_map_size);
+	JIT::jit_block_t get_jit_block(vaddr_t pc, size_t cov_map_size);
 
 	// Perform run with provided input using the JIT
-	void run_jit(const std::string& input, cov_t& cov,
-	             JIT::jit_cache_t& jit_cache, Stats& local_stats);
+	void run_jit(const std::string& input, cov_t& cov, Stats& local_stats);
 
 	void dump(bool dump_pc, bool dump_regs) const;
 	void dump_os(std::ostream& os, bool dump_pc, bool dump_regs) const;
