@@ -26,30 +26,35 @@
 
 using namespace std;
 
-Elf_parser::Elf_parser(const string& elf_path): m_elf_path(elf_path) {   
+Elf_parser::Elf_parser(const string& elf_path): m_elf_path(elf_path) {
     // Save absolute file path. Ugly conversions here
 	char abspath[PATH_MAX];
 	if (!realpath(elf_path.c_str(), abspath))
 		die("error realpath: %s\n", strerror(errno));
 	m_elf_abs_path.assign(abspath);
-    
+
     // Load memory map
     load_memory_map();
+
+    // Get load address
+    m_load_addr = UINT32_MAX;
+    for (const segment_t& s : get_segments())
+        m_load_addr = min(m_load_addr, s.virtaddr);
 }
 
-string Elf_parser::get_path(){
+string Elf_parser::get_path() const{
     return m_elf_path;
 }
 
-string Elf_parser::get_abs_path(){
+string Elf_parser::get_abs_path() const{
     return m_elf_abs_path;
 }
 
-long Elf_parser::get_entry() {
+vaddr_t Elf_parser::get_entry() const {
     return ((Elf32_Ehdr*)m_mmap_program)->e_entry;
 }
 
-phinfo_t Elf_parser::get_phinfo(){
+phinfo_t Elf_parser::get_phinfo() const{
     Elf32_Ehdr* ehdr = (Elf32_Ehdr*)m_mmap_program;
     phinfo_t result = {
         ehdr->e_phoff,
@@ -59,7 +64,7 @@ phinfo_t Elf_parser::get_phinfo(){
     return result;
 }
 
-std::vector<section_t> Elf_parser::get_sections() {
+std::vector<section_t> Elf_parser::get_sections() const {
     Elf32_Ehdr* ehdr  = (Elf32_Ehdr*)(m_mmap_program);
     Elf32_Shdr* shdr  = (Elf32_Shdr*)(m_mmap_program + ehdr->e_shoff);
     Elf32_Half  shnum = ehdr->e_shnum;
@@ -83,12 +88,11 @@ std::vector<section_t> Elf_parser::get_sections() {
     return sections;
 }
 
-std::vector<segment_t> Elf_parser::get_segments(Elf32_Addr& load_addr) {
+std::vector<segment_t> Elf_parser::get_segments() const {
     Elf32_Ehdr*ehdr = (Elf32_Ehdr*)(m_mmap_program);
     Elf32_Phdr*phdr = (Elf32_Phdr*)(m_mmap_program + ehdr->e_phoff);
     uint16_t phnum  = ehdr->e_phnum;
 
-    load_addr = UINT32_MAX;
     std::vector<segment_t> segments;
     for (uint16_t i = 0; i < phnum; ++i) {
         segment_t segment;
@@ -100,15 +104,13 @@ std::vector<segment_t> Elf_parser::get_segments(Elf32_Addr& load_addr) {
         segment.memsize  = phdr[i].p_memsz;
         segment.flags    = get_segment_flags(phdr[i].p_flags);
         segment.align    = phdr[i].p_align;
-        segment.data             = m_mmap_program+segment.offset;
+        segment.data     = m_mmap_program+segment.offset;
         segments.push_back(segment);
-        if (segment.virtaddr < load_addr)
-            load_addr = segment.virtaddr;
     }
     return segments;
 }
 
-std::vector<symbol_t> Elf_parser::get_symbols() {
+std::vector<symbol_t> Elf_parser::get_symbols() const {
     std::vector<section_t> secs = get_sections();
 
     // get strtab
@@ -160,7 +162,7 @@ std::vector<symbol_t> Elf_parser::get_symbols() {
     return symbols;
 }
 
-std::vector<relocation_t> Elf_parser::get_relocations() {
+std::vector<relocation_t> Elf_parser::get_relocations() const {
     auto secs = get_sections();
     auto syms = get_symbols();
     
@@ -198,7 +200,7 @@ std::vector<relocation_t> Elf_parser::get_relocations() {
     return relocations;
 }
 
-uint8_t *Elf_parser::get_memory_map() {
+uint8_t *Elf_parser::get_memory_map() const {
     return m_mmap_program;
 }
 
@@ -226,7 +228,7 @@ void Elf_parser::load_memory_map() {
         die("elf_parser: this is not an ELF32\n");
 }
 
-std::string Elf_parser::get_section_type(Elf32_Word tt) {
+std::string Elf_parser::get_section_type(Elf32_Word tt) const {
     switch(tt) {
         case 0:  return "SHT_NULL";     // Section header table entry unused
         case 1:  return "SHT_PROGBITS"; // Program data
@@ -243,7 +245,7 @@ std::string Elf_parser::get_section_type(Elf32_Word tt) {
     }
 }
 
-std::string Elf_parser::get_segment_type(Elf32_Word seg_type) {
+std::string Elf_parser::get_segment_type(Elf32_Word seg_type) const {
     switch(seg_type) {
         case PT_NULL:      return "NULL";      // Program header entry unused 
         case PT_LOAD:      return "LOAD";      // Loadable program segment
@@ -267,7 +269,7 @@ std::string Elf_parser::get_segment_type(Elf32_Word seg_type) {
     }
 }
 
-std::string Elf_parser::get_segment_flags(Elf32_Word seg_flags) {
+std::string Elf_parser::get_segment_flags(Elf32_Word seg_flags) const {
     std::string flags;
     if(seg_flags & PF_R)
         flags.append("R");
@@ -278,7 +280,7 @@ std::string Elf_parser::get_segment_flags(Elf32_Word seg_flags) {
     return flags;
 }
 
-std::string Elf_parser::get_symbol_type(uint8_t sym_type) {
+std::string Elf_parser::get_symbol_type(uint8_t sym_type) const {
     switch(ELF32_ST_TYPE(sym_type)) {
         case 0:  return "NOTYPE";
         case 1:  return "OBJECT";
@@ -293,7 +295,7 @@ std::string Elf_parser::get_symbol_type(uint8_t sym_type) {
     }
 }
 
-std::string Elf_parser::get_symbol_bind(uint8_t sym_bind) {
+std::string Elf_parser::get_symbol_bind(uint8_t sym_bind) const {
     switch(ELF32_ST_BIND(sym_bind)) {
         case 0:  return "LOCAL";
         case 1:  return "GLOBAL";
@@ -306,7 +308,7 @@ std::string Elf_parser::get_symbol_bind(uint8_t sym_bind) {
     }
 }
 
-std::string Elf_parser::get_symbol_visibility(uint8_t sym_vis) {
+std::string Elf_parser::get_symbol_visibility(uint8_t sym_vis) const {
     switch(ELF32_ST_VISIBILITY(sym_vis)) {
         case 0:  return "DEFAULT";
         case 1:  return "INTERNAL";
@@ -316,7 +318,7 @@ std::string Elf_parser::get_symbol_visibility(uint8_t sym_vis) {
     }
 }
 
-std::string Elf_parser::get_symbol_index(Elf32_Half sym_idx) {
+std::string Elf_parser::get_symbol_index(Elf32_Half sym_idx) const {
     switch(sym_idx) {
         case SHN_ABS:    return "ABS";
         case SHN_COMMON: return "COM";
@@ -326,7 +328,7 @@ std::string Elf_parser::get_symbol_index(Elf32_Half sym_idx) {
     }
 }
 
-std::string Elf_parser::get_relocation_type(Elf32_Word rela_type) {
+std::string Elf_parser::get_relocation_type(Elf32_Word rela_type) const {
     switch(ELF32_R_TYPE(rela_type)) {
         case 1:  return "R_386_32";
         case 2:  return "R_386_PC32";
@@ -338,7 +340,7 @@ std::string Elf_parser::get_relocation_type(Elf32_Word rela_type) {
 }
 
 vaddr_t Elf_parser::get_rel_symbol_value(Elf32_Word sym_idx, 
-                                         const std::vector<symbol_t>& syms)
+                                         const std::vector<symbol_t>& syms) const
 {    
     vaddr_t sym_val = 0;
     for(const symbol_t& sym : syms) {
@@ -351,7 +353,7 @@ vaddr_t Elf_parser::get_rel_symbol_value(Elf32_Word sym_idx,
 }
 
 std::string Elf_parser::get_rel_symbol_name(Elf32_Word sym_idx,
-                                            const std::vector<symbol_t>& syms)
+                                            const std::vector<symbol_t>& syms) const
 {
     std::string sym_name;
     for(const symbol_t& sym : syms) {

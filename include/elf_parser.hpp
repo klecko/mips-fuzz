@@ -109,38 +109,40 @@ struct relocation_t {
 class Elf_parser {
     public:
         Elf_parser (const std::string &elf_path);
-        long get_entry();
-        std::string get_path();
-        std::string get_abs_path();
-        phinfo_t get_phinfo();
-        std::vector<section_t> get_sections();
-        std::vector<segment_t> get_segments(Elf32_Addr& load_addr);
-        std::vector<symbol_t> get_symbols();
-        std::vector<relocation_t> get_relocations();
-        uint8_t *get_memory_map();
-        
+        vaddr_t get_entry() const;
+        vaddr_t get_load_addr() const {return m_load_addr;};
+        std::string get_path() const;
+        std::string get_abs_path() const;
+        phinfo_t get_phinfo() const;
+        std::vector<section_t> get_sections() const;
+        std::vector<segment_t> get_segments() const;
+        std::vector<symbol_t> get_symbols() const;
+        std::vector<relocation_t> get_relocations() const;
+        uint8_t *get_memory_map() const;
+
     private:
         void load_memory_map();
 
-        std::string get_section_type(uint32_t tt);
+        std::string get_section_type(uint32_t tt) const;
 
-        std::string get_segment_type(Elf32_Word seg_type);
-        std::string get_segment_flags(Elf32_Word seg_flags);
+        std::string get_segment_type(Elf32_Word seg_type) const;
+        std::string get_segment_flags(Elf32_Word seg_flags) const;
 
-        std::string get_symbol_type(uint8_t sym_type);
-        std::string get_symbol_bind(uint8_t sym_bind);
-        std::string get_symbol_visibility(uint8_t sym_vis);
-        std::string get_symbol_index(Elf32_Half sym_idx);
+        std::string get_symbol_type(uint8_t sym_type) const;
+        std::string get_symbol_bind(uint8_t sym_bind) const;
+        std::string get_symbol_visibility(uint8_t sym_vis) const;
+        std::string get_symbol_index(Elf32_Half sym_idx) const;
 
-        std::string get_relocation_type(Elf32_Word rela_type);
+        std::string get_relocation_type(Elf32_Word rela_type) const;
         vaddr_t     get_rel_symbol_value(Elf32_Word sym_idx,
-                                         const std::vector<symbol_t>& syms);
+                                         const std::vector<symbol_t>& syms) const;
         std::string get_rel_symbol_name(Elf32_Word sym_idx,
-                                        const std::vector<symbol_t>& syms);
+                                        const std::vector<symbol_t>& syms) const;
 
         std::string m_elf_path;
         std::string m_elf_abs_path;
         uint8_t*    m_mmap_program;
+        vaddr_t     m_load_addr;
 };
 
 #endif

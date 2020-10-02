@@ -167,7 +167,7 @@ int main(){
 		{"readelf", "-e", "input_file"} // argv
 	);
 
-	JIT::jit_cache_t jit_cache(emu.memsize()/4);
+	JIT::jit_cache_t jit_cache((emu.memsize() - emu.get_load_addr())/4);
 	//jit_cache.set_empty_key(0);
 
 	emu.options.jit_cache    = &jit_cache;

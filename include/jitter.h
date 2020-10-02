@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <bitset>
 #include <mutex>
+#include <fstream>
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "common.h"
@@ -86,6 +87,45 @@ typedef std::vector<std::atomic<jit_block_t>> jit_cache_t;
 
 const jit_block_t JIT_BLOCK_COMPILING = (jit_block_t)1;
 
+class CovIdProvider {
+	private:
+		std::atomic_flag lock;
+		std::atomic<uint32_t> next_cov_id;
+		std::map<std::pair<vaddr_t, size_t>, uint32_t> cov_ids;
+		uint32_t get_next(){
+			return next_cov_id++;
+		}
+	public:
+		CovIdProvider(){
+			std::ifstream is("./jitcache/next_cov_id");
+			if (!is.good())
+				next_cov_id = 0;
+			else {
+				uint32_t v;
+				is >> v;
+				next_cov_id = v;
+			}
+			is.close();
+		}
+		void save(){
+			while (lock.test_and_set());
+			std::ofstream os("./jitcache/next_cov_id");
+			os << next_cov_id;
+			os.close();
+			lock.clear();
+		}
+		void check_max(uint32_t max_cov_id){
+			if (next_cov_id >= max_cov_id)
+				die("Out of cov ids: %u/%u\n", next_cov_id.load(), max_cov_id);
+		}
+		uint32_t get(vaddr_t pc, size_t i, uint32_t max_cov_id){
+			check_max(max_cov_id);
+			auto key = std::make_pair(pc, i);
+			if (!cov_ids.count(key))
+				cov_ids[key] = get_next();
+			return cov_ids[key];
+		}
+};
 
 class Jitter {
 public:
@@ -105,9 +145,7 @@ private:
 	std::vector<linkage_t> linkages;
 	const EmuOptions& options;
 
-	static uint32_t next_cov_id;
-	static std::atomic_flag lock_next_cov_id;
-	static std::unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> cov_ids;
+	static CovIdProvider cov_id_provider;
 
 	std::unique_ptr<llvm::LLVMContext> p_context;
 	std::unique_ptr<llvm::Module>      p_module;
@@ -213,8 +251,6 @@ private:
 	// Generate vm exit with given information
 	void vm_exit(ExitInfo::ExitReason reason, llvm::Value* reenter_pc=NULL,
 	             llvm::Value* info1=NULL, llvm::Value* info2=NULL);
-
-	uint32_t get_new_cov_id(size_t cov_map_size);
 
 	// Methods for reporting code coverage. They return whether they generated
 	// a vm exit or not.

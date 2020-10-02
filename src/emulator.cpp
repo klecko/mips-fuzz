@@ -113,6 +113,10 @@ vaddr_t Emulator::get_prev_pc() const {
 	return prev_pc;
 }
 
+vaddr_t Emulator::get_load_addr() const {
+	return elf.get_load_addr();
+}
+
 Emulator Emulator::fork() const {
 	Emulator new_emu(*this);
 	new_emu.mmu = mmu.fork();
@@ -144,8 +148,7 @@ void Emulator::load_elf(const vector<string>& argv){
 	// http://articles.manugarg.com/aboutelfauxiliaryvectors.html
 	// I add random numbers at the bottom of the stack for auxv
 	cout << "Loading " << elf.get_path() << endl;
-	vaddr_t load_addr; // ELF load address
-	mmu.load_elf(elf.get_segments(load_addr));
+	mmu.load_elf(elf.get_segments());
 
 	// Set entry
 	pc = elf.get_entry();
@@ -178,7 +181,8 @@ void Emulator::load_elf(const vector<string>& argv){
 
 	// Set up auxp. They aren't necessary, I did them tried to solve something
 	// unrelated.
-	phinfo_t phinfo = elf.get_phinfo();
+	phinfo_t phinfo    = elf.get_phinfo();
+	vaddr_t  load_addr = elf.get_load_addr();
 	Elf32_auxv_t auxv[] = {
 		{AT_RANDOM, {random_bytes}},               // Address of 16 random bytes
 		{AT_EXECFN, {argv_vm[0]}},                 // Filename of the program
@@ -341,10 +345,10 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 	}
 }
 
-inline __attribute__((always_inline))
+//inline __attribute__((always_inline))
 JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, size_t cov_map_size){
 	// Read block from cache
-	vaddr_t id_cache = pc/4;
+	vaddr_t id_cache = (pc - elf.get_load_addr())/4;
 	JIT::jit_cache_t& jit_cache = *options.jit_cache;
 	JIT::jit_block_t  jit_block = jit_cache[id_cache];
 
@@ -369,7 +373,8 @@ JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, size_t cov_map_size){
 	} else if (jit_block == JIT::JIT_BLOCK_COMPILING){
 		// Value was JIT_BLOCK_COMPILING: there's another thread compiling.
 		// Wait for it to finish and update jit_block with the result.
-		while (jit_cache[id_cache] == JIT::JIT_BLOCK_COMPILING);
+		while (jit_cache[id_cache] == JIT::JIT_BLOCK_COMPILING)
+			usleep(1000);
 		jit_block = jit_cache[id_cache];
 	}
 

@@ -45,6 +45,9 @@ public:
 	vaddr_t get_prev_pc() const;
 	void set_pc(vaddr_t addr);
 
+	// Get ELF load address
+	vaddr_t get_load_addr() const;
+
 	// Forks the emulator and returns the child
 	Emulator fork() const;
 

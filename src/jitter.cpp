@@ -1,6 +1,5 @@
 #include <iostream>
 #include <sstream>
-#include <fstream>
 #include <unistd.h>
 #include <unordered_set>
 #include "llvm/IR/LLVMContext.h"
@@ -30,19 +29,7 @@
 using namespace std;
 using namespace JIT;
 
-uint32_t load_next_cov_id(){
-	uint32_t result;
-	ifstream is("./jitcache/next_cov_id");
-	if (!is.good())
-		result = 0;
-	else
-		is >> result;
-	is.close();
-	return result;
-}
-uint32_t    Jitter::next_cov_id      = load_next_cov_id();
-atomic_flag Jitter::lock_next_cov_id = ATOMIC_FLAG_INIT;
-unordered_map<vaddr_t, std::pair<uint32_t, uint32_t>> Jitter::cov_ids;
+CovIdProvider Jitter::cov_id_provider;
 
 struct jit_init {
 	jit_init(){
@@ -216,6 +203,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 		die("bad module\n");
 	}
 	compile();
+	cov_id_provider.save();
 }
 
 void Jitter::link_stuff(llvm::ExecutionEngine* ee){
@@ -565,24 +553,6 @@ void Jitter::vm_exit(ExitInfo::ExitReason reason, llvm::Value* reenter_pc,
 	builder.CreateRet(builder.CreateLoad(p_instr, "instr"));
 }
 
-uint32_t Jitter::get_new_cov_id(size_t cov_map_size){
-	while (lock_next_cov_id.test_and_set());
-
-	if (next_cov_id >= cov_map_size)
-		die("Out of coverage ids: %u/%lu\n", next_cov_id, cov_map_size);
-
-	//cout << "Returning cov id " << next_cov_id << endl;
-	uint32_t ret = next_cov_id++;
-
-	// Save to disk
-	ofstream os("./jitcache/next_cov_id");
-	os << next_cov_id << endl;
-	os.close();
-
-	lock_next_cov_id.clear();
-	return ret;
-}
-
 bool Jitter::add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
                           llvm::Value* cmp)
 {
@@ -591,17 +561,11 @@ bool Jitter::add_coverage(vaddr_t pc, vaddr_t jump1, vaddr_t jump2,
 
 	// Conditional branches version
 	if (UNIQUE_COV_ID_ATTEMPT){
-		// Get coverage ids for this branch
-		if (!cov_ids.count(pc)){
-			cov_ids[pc].first  = get_new_cov_id(cov_map_size);
-			cov_ids[pc].second = get_new_cov_id(cov_map_size);
-		}
-
 		// Select coverage id depending on the branch result (taking it or not)
 		llvm::Value* cov_id = builder.CreateSelect(
 			cmp,
-			builder.getInt32(cov_ids[pc].first),
-			builder.getInt32(cov_ids[pc].second)
+			builder.getInt32(cov_id_provider.get(pc, 0, cov_map_size)),
+			builder.getInt32(cov_id_provider.get(pc, 1, cov_map_size))
 		);
 
 		// If we must check repeated cov ids, get jump address. If not, we don't
@@ -636,11 +600,9 @@ bool Jitter::add_coverage(vaddr_t pc, vaddr_t jump){
 	// Unconditional branches version
 	if (UNIQUE_COV_ID_ATTEMPT){
 		// Get coverage id for this branch
-		if (!cov_ids.count(pc))
-			cov_ids[pc].first = get_new_cov_id(cov_map_size);
-		return add_coverage(builder.getInt32(cov_ids[pc].first),
-		                    builder.getInt32(pc), builder.getInt32(jump));
-
+		uint32_t cov_id = cov_id_provider.get(pc, 0, cov_map_size);
+		return add_coverage(builder.getInt32(cov_id), builder.getInt32(pc),
+		                    builder.getInt32(jump));
 	} else {
 		// Branch hash
 		return add_coverage(builder.getInt32(pc), builder.getInt32(jump));
