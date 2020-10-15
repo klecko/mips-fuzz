@@ -47,11 +47,11 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	rec_cov   = false;
 	tls       = 0;
 	running   = false;
-	input     = NULL;
-	input_sz  = 0;
 	load_elf(argv);
 	set_bps();
-	//Jitter(0x41df90, mmu, 128*1024, breakpoints, this);
+	open_files[STDIN_FILENO]  = FileStdin();
+	open_files[STDOUT_FILENO] = FileStdout();
+	open_files[STDERR_FILENO] = FileStderr();
 }
 
 vsize_t Emulator::memsize() const {
@@ -117,6 +117,10 @@ vaddr_t Emulator::get_load_addr() const {
 	return elf.get_load_addr();
 }
 
+void Emulator::set_loaded_file(const string& filename, const string& content){
+	loaded_files[filename] = {content.c_str(), content.size()};
+}
+
 Emulator Emulator::fork() const {
 	Emulator new_emu(*this);
 	new_emu.mmu = mmu.fork();
@@ -137,9 +141,8 @@ void Emulator::reset(const Emulator& other){
 	rec_cov    = other.rec_cov;
 	tls        = other.tls;
 	running    = other.running;
-	input      = other.input;
-	input_sz   = other.input_sz;
 	open_files = other.open_files;
+	loaded_files = other.loaded_files;
 }
 
 
@@ -218,7 +221,7 @@ void Emulator::set_bps(){
 	/* breakpoints.set_bp_sym("strcmp", &Emulator::strcmp_bp, true);
 	breakpoints.set_bp_sym("strlen", &Emulator::strlen_bp, true);
 	breakpoints.set_bp_sym("strnlen", &Emulator::strnlen_bp, true); */
-	//breakpoints.set_bp_addr("test", 0x400964, &Emulator::test_bp, false);
+	//breakpoints.set_bp_addr("test", 0x400ab8, &Emulator::test_bp, false);
 }
 
 void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
@@ -242,11 +245,11 @@ void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
 	}
 }
 
-void Emulator::run(const string& input, cov_t& cov, Stats& local_stats){
+void Emulator::run(cov_t& cov, Stats& local_stats){
 	if (options.jit_cache)
-		run_jit(input, cov, local_stats);
+		run_jit(cov, local_stats);
 	else
-		run_interpreter(input, cov, local_stats);
+		run_interpreter(cov, local_stats);
 }
 
 void Emulator::add_coverage(cov_t& cov, vaddr_t from, vaddr_t to){
@@ -324,14 +327,7 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	local_stats.inst_handl_cycles += rdtsc2() - cycles;
 }
 
-void Emulator::run_interpreter(const string& input, cov_t& cov,
-                               Stats& local_stats)
-{
-	// Save provided input. Internal representation is as const char* and not
-	// as string so we don't have to perform any copy.
-	this->input    = input.c_str();
-	this->input_sz = input.size();
-
+void Emulator::run_interpreter(cov_t& cov, Stats& local_stats){
 	// Perform execution recording number of executed instructions
 	uint64_t instr_exec = 0;
 	running = true;
@@ -345,7 +341,7 @@ void Emulator::run_interpreter(const string& input, cov_t& cov,
 	}
 }
 
-//inline __attribute__((always_inline))
+inline __attribute__((always_inline))
 JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, size_t cov_map_size){
 	// Read block from cache
 	vaddr_t id_cache = (pc - elf.get_load_addr())/4;
@@ -384,12 +380,7 @@ JIT::jit_block_t Emulator::get_jit_block(vaddr_t pc, size_t cov_map_size){
 	return jit_block;
 }
 
-void Emulator::run_jit(const string& input, cov_t& cov, Stats& local_stats){
-	// Save provided input. Internal representation is as const char* and not
-	// as string so we don't have to perform any copy.
-	this->input    = input.c_str();
-	this->input_sz = input.size();
-
+void Emulator::run_jit(cov_t& cov, Stats& local_stats){
 	// JIT block arguments
 	JIT::VmState state = {
 		regs,
@@ -491,6 +482,7 @@ void Emulator::run_file(const std::string& filepath){
 	ss << ifs.rdbuf();
 	if (!ifs.good())
 		die("Error reading file %s\n", filepath.c_str());
+	set_loaded_file("input_file", ss.str());
 
 	cout << "Running file " << filepath << endl;
 
@@ -498,7 +490,7 @@ void Emulator::run_file(const std::string& filepath){
 	Stats dummy2;
 
 	try {
-		run(ss.str(), dummy1, dummy2);
+		run(dummy1, dummy2);
 	} catch (const Fault& f){
 		cout << "[PC: 0x" << hex << prev_pc << "] " << f << endl;
 	} catch (const RunTimeout& t){
@@ -681,25 +673,30 @@ uint32_t Emulator::sys_openat(int32_t dirfd, vaddr_t pathname_addr, int32_t flag
 	die(""); */
 	string pathname = mmu.read_string(pathname_addr);
 
-	// Result fd
-	uint32_t fd;
-	
-	// Create input file
-	if (pathname == "input_file"){
+	// Find unused fd
+	uint32_t fd = 3;
+	while (open_files.count(fd))
+		fd++;
+
+	if (loaded_files.count(pathname)){
 		if ((flags & O_RDWR) == O_RDWR || (flags & O_WRONLY) == O_WRONLY)
-			die("opening input file with write permissions");
-		
-		// Find unused fd
-		fd = 3;
-		while (open_files.count(fd))
-			fd++;
+			die("opening file with write permissions");
+
+		auto file_buf = loaded_files[pathname];
 
 		// God, forgive me for this casting.
-		File input_file(flags, (char*)input, input_sz);
-		open_files[fd] = move(input_file);
-	} else if (pathname == "/dev/tty")
-		fd = 1;
-	else
+		open_files[fd] = File(flags, (char*)file_buf.first, file_buf.second);
+
+	} else if (pathname == "/dev/random") {
+		open_files[fd] = FileRandom();
+
+	} else if (pathname == "/dev/urandom") {
+		open_files[fd] = FileUrandom();
+
+	} else if (pathname == "/dev/tty") {
+		fd = STDOUT_FILENO;
+
+	} else
 		die("Unimplemented openat %s\n", pathname.c_str());
 
 	dbgprintf("openat(%d, \"%s\", %d) --> %d\n", dirfd, pathname.c_str(), flags, fd);
@@ -786,34 +783,12 @@ uint32_t Emulator::sys_readlink(vaddr_t path_addr, vaddr_t buf_addr,
 uint32_t Emulator::sys_read(uint32_t fd, vaddr_t buf_addr, vsize_t count,
                             uint32_t& error)
 {
-	// Stdin, stdout and stderr
-	switch (fd){
-		case STDIN_FILENO:
-			die("reading from stdin\n");
-			break;
-
-		case STDOUT_FILENO:
-			die("reading from stdout?\n");
-			break;
-
-		case STDERR_FILENO:
-			die("reading from stderr?\n");
-			break;
-	}
-
 	// Check if file is open
 	if (!open_files.count(fd))
 		die("reading from not used fd\n");
 
-	// Check if file is readable
-	File& f = open_files[fd];
-	if (!f.is_readable())
-		die("reading from non readable fd\n");
-
-	// Read
-	char* cursor = f.get_cursor();
-	vsize_t real_count = f.move_cursor(count);
-	mmu.write_mem(buf_addr, cursor, real_count);
+	// Perform read
+	vsize_t real_count = open_files[fd].read(buf_addr, count, mmu);
 
 	dbgprintf("read(%d, 0x%X, %d) --> %d\n", fd, buf_addr, count, real_count);
 	error = 0;
@@ -825,70 +800,62 @@ uint32_t Emulator::sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 {
 	dbgprintf("write(%d, 0x%X, %d)\n", fd, buf_addr, count);
 
-	// Stdin, stdout and stderr
-	switch (fd){
-		case STDIN_FILENO:
-			die("writing to stdin?\n");
-			break;
-
-		case STDOUT_FILENO:
-		case STDERR_FILENO:
-			char buf[count + 1];
-			mmu.read_mem(buf, buf_addr, count);
-			buf[count] = 0;
-			guestprintf("%s", buf);
-			error = 0;
-			return count;
-	}
-
-	die("write(%d, 0x%X, %d)\n", fd, buf_addr, count);
-
 	// Check if file is open
 	if (!open_files.count(fd))
 		die("writing to not used fd\n");
 
-	// Check if file is writable
-	File& f = open_files[fd];
-	if (!f.is_writable())
-		die("writing to non writable fd\n");
-
-	// Write
-	char* cursor = f.get_cursor();
-	vsize_t real_count = f.move_cursor(count);
-	mmu.read_mem(cursor, buf_addr, real_count);
+	// Perform write
+	vsize_t real_count =
+		open_files[fd].write(buf_addr, count, mmu, options.guest_output);
 
 	dbgprintf("write(%d, 0x%X, %d) --> %d\n", fd, buf_addr, count, real_count);
 	error = 0;
 	return real_count;
 }
 
+uint32_t Emulator::sys_fstat(uint32_t fd, vaddr_t statbuf_addr,
+                             uint32_t& error)
+{
+	if (!open_files.count(fd))
+		die("fstat64 to not open fd\n");
+
+	// Get the stat info and write it to memory
+	struct guest_stat s;
+	open_files[fd].stat(s);
+	mmu.write_mem(statbuf_addr, &s, sizeof(s));
+
+	dbgprintf("fstat(%d, 0x%X) --> 0\n", fd, statbuf_addr);
+	error = 0;
+	return 0;
+}
+
+uint32_t Emulator::sys_stat(vaddr_t pathname_addr, vaddr_t statbuf_addr,
+                            uint32_t& error)
+{
+	struct guest_stat s;
+	string pathname = mmu.read_string(pathname_addr);
+	if (loaded_files.count(pathname)){
+		stat_regular_file(s, loaded_files[pathname].second);
+		mmu.write_mem(statbuf_addr, &s, sizeof(s));
+	} else
+		die("Unimplemented stat64: %s\n", pathname.c_str());
+
+	die("stat(\"%s\", 0x%X) --> 0\n", pathname.c_str(), statbuf_addr);
+	error = 0;
+	return 0;
+}
+
 uint32_t Emulator::sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
                                uint32_t& error)
 {
+	if (!open_files.count(fd))
+		die("fstat64 to not open fd\n");
+
+	// Get the stat info and write it to memory
 	struct guest_stat64 s;
-	// Stdin, stdout and stderr
-	switch (fd){
-		case STDIN_FILENO:
-			die("fstat stdin?\n");
-			break;
-
-		case STDOUT_FILENO:
-			guest_stat_stdout(s);
-			break;
-
-		case STDERR_FILENO:
-			die("fstat stderr?\n");
-			break;
-
-		default:
-			// Check if file is open
-			if (!open_files.count(fd))
-				die("fstat64 to not open fd %d\n", fd);
-
-			open_files[fd].stat(s);
-	}
-
+	open_files[fd].stat64(s);
 	mmu.write_mem(statbuf_addr, &s, sizeof(s));
+
 	dbgprintf("fstat64(%d, 0x%X) --> 0\n", fd, statbuf_addr);
 	error = 0;
 	return 0;
@@ -897,12 +864,11 @@ uint32_t Emulator::sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
 uint32_t Emulator::sys_stat64(vaddr_t pathname_addr, vaddr_t statbuf_addr,
                               uint32_t& error)
 {
+	struct guest_stat64 s;
 	string pathname = mmu.read_string(pathname_addr);
-	if (pathname == "input_file"){
-		struct guest_stat64 s;
-		guest_stat_default(s, input_sz);
+	if (loaded_files.count(pathname)){
+		stat64_regular_file(s, loaded_files[pathname].second);
 		mmu.write_mem(statbuf_addr, &s, sizeof(s));
-
 	} else
 		die("Unimplemented stat64: %s\n", pathname.c_str());
 
@@ -963,17 +929,33 @@ uint32_t Emulator::sys_llseek(uint32_t fd, uint32_t offset_hi,
 uint32_t Emulator::sys_ioctl(uint32_t fd, uint32_t request, vaddr_t argp,
 		                     uint32_t& error)
 {
-	dbgprintf("ioctl(%d, 0x%X, 0x%X)\n", fd, request, argp);
+	dbgprintf("ioctl(%d, 0x%X, 0x%X) --> -1\n", fd, request, argp);
 	error = 1;
 	return -1;
 }
 
 uint32_t Emulator::sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& error){
 	string pathname = mmu.read_string(pathname_addr);
-	dbgprintf("access(%s, %d) --> -1\n", pathname.c_str(), mode);
+	die("access(%s, %d) --> -1\n", pathname.c_str(), mode);
 	error = 1;
 	return -1;
 }
+
+uint32_t Emulator::sys_poll(vaddr_t fds_addr, uint32_t nfds, uint32_t timeout,
+	                        uint32_t& error)
+{
+	assert(nfds == 1);
+	guest_pollfd poll;
+	mmu.read_mem(&poll, fds_addr, sizeof(poll));
+
+	assert(poll.events == 1); // POLL IN
+	poll.revents |= 1;
+	mmu.write_mem(fds_addr, &poll, sizeof(poll));
+
+	error = 0;
+	return 1;
+}
+
 
 bool Emulator::handle_syscall(uint32_t syscall){
 	//cout << *this << endl;
@@ -1004,9 +986,20 @@ bool Emulator::handle_syscall(uint32_t syscall){
 			);
 			break;
 
-
 		case 4006: // close
 			regs[Reg::v0] = sys_close(regs[Reg::a0], regs[Reg::a3]);
+			break;
+
+		case 4013: // time
+			if (regs[Reg::a0])
+				die("time not NULL\n");
+			regs[Reg::v0] = time(NULL);
+			regs[Reg::a3] = 0;
+			break;
+
+		case 4020: // getpid
+			regs[Reg::v0] = 1337;
+			regs[Reg::a3] = 0;
 			break;
 
 		case 4033: // access
@@ -1043,6 +1036,16 @@ bool Emulator::handle_syscall(uint32_t syscall){
 			);
 			break;
 
+		case 4106: // stat
+			regs[Reg::v0] =
+				sys_stat(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
+			break;
+
+		case 4108: // fstat
+			regs[Reg::v0] =
+				sys_fstat(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
+			break;
+
 		case 4122: // uname
 			regs[Reg::v0] = sys_uname(regs[Reg::a0], regs[Reg::a3]);
 			break;
@@ -1067,6 +1070,15 @@ bool Emulator::handle_syscall(uint32_t syscall){
 			);
 			break;
 
+		case 4188: // poll
+			regs[Reg::v0] = sys_poll(
+				regs[Reg::a0],
+				regs[Reg::a1],
+				regs[Reg::a2],
+				regs[Reg::a3]
+			);
+			break;
+
 		case 4210: // mmap2
 			regs[Reg::v0] = sys_mmap2(
 				regs[Reg::a0],
@@ -1080,12 +1092,12 @@ bool Emulator::handle_syscall(uint32_t syscall){
 			break;
 
 		case 4213: // stat64
-			regs[Reg::v0] = 
+			regs[Reg::v0] =
 				sys_stat64(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
 			break;
 
 		case 4215: // fstat64
-			regs[Reg::v0] = 
+			regs[Reg::v0] =
 				sys_fstat64(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
 			break;
 
@@ -1106,6 +1118,7 @@ bool Emulator::handle_syscall(uint32_t syscall){
 			break;
 
 		default:
+			cout << *this << endl;
 			die("Unimplemented syscall at 0x%X: %d\n", prev_pc, syscall);
 	}
 	return false;

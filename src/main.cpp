@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <thread>
 #include <cstring>
 #include <sched.h>
@@ -12,7 +13,7 @@ using namespace std;
 /* TODO
 Adapt the elf parser to my code
 */
-#define SINGLE_RUN 0
+#define SINGLE_RUN 1
 
 void print_stats(Stats& stats, const Corpus& corpus){
 	// Each second get data from stats and print it
@@ -88,6 +89,7 @@ void worker(int id, const Emulator& parent, Corpus& corpus, Stats& stats){
 			// Get new mutated input
 			cycles = rdtsc1(); // mut_cycles
 			const string& input = corpus.get_new_input(id, rng);
+			runner.set_loaded_file("input_file", input);
 			local_stats.mut_cycles += rdtsc1() - cycles;
 
 			// Clear coverage
@@ -98,7 +100,7 @@ void worker(int id, const Emulator& parent, Corpus& corpus, Stats& stats){
 			// Run case
 			cycles = rdtsc1(); // run_cycles
 			try {
-				runner.run(input, cov, local_stats);
+				runner.run(cov, local_stats);
 			} catch (const Fault& f) {
 				// Crash. Corpus will handle it if it is a new one
 				local_stats.crashes++;
@@ -146,6 +148,15 @@ void create_folder(const char* name){
 		die("%s is not a folder\n", name);
 }
 
+string load_file(const char* filepath){
+	ifstream ifs(filepath);
+	ostringstream ss;
+	ss << ifs.rdbuf();
+	if (!ifs.good())
+		die("Error reading file %s\n", filepath);
+	return ss.str();
+}
+
 int main(){
 	const int num_threads =
 		(DEBUG|SINGLE_RUN ? 1 : thread::hardware_concurrency());
@@ -163,14 +174,26 @@ int main(){
 	Corpus corpus(num_threads, "../corpus");
 	Emulator emu(
 		8 * 1024 * 1024,                // memory
-		"../test_bins/readelf",         // path to elf
-		{"readelf", "-e", "input_file"} // argv
+		/* "../test_bins/readelf",         // path to elf
+		{"readelf", "-e", "input_file"} // argv */
+		"../test_bins/openssl-1.0.1f/target",         // path to elf
+		{"target"} // argv
+	);
+
+	// Loaded files for openssl
+	emu.set_loaded_file(
+		"runtime/server.key",
+		load_file("../test_bins/openssl-1.0.1f/runtime/server.key")
+	);
+	emu.set_loaded_file(
+		"runtime/server.pem",
+		load_file("../test_bins/openssl-1.0.1f/runtime/server.pem")
 	);
 
 	JIT::jit_cache_t jit_cache((emu.memsize() - emu.get_load_addr())/4);
 	//jit_cache.set_empty_key(0);
 
-	emu.options.jit_cache    = &jit_cache;
+	//emu.options.jit_cache    = &jit_cache;
 	emu.options.guest_output = false;
 	emu.options.coverage     = true;
 	emu.options.dump_pc      = false;
@@ -189,7 +212,7 @@ int main(){
 	// xxd:        0x00429e6c
 	// readelf:    0x004c081c
 	// stegdetect: 0x0045d40c
-	try {
+	/* try {
 		uint64_t insts = emu.run_until(0x004c081c);//0x00423ec8);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
@@ -197,7 +220,7 @@ int main(){
 		cout << "[PC: 0x" << hex << emu.get_prev_pc() << "] " << f << endl;
 		cout << emu << endl;
 		return -1;
-	}
+	} */
 
 	// Create worker threads and assign each to one core
 	cpu_set_t cpu;

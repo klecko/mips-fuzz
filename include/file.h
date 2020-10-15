@@ -5,12 +5,25 @@
 #include <stdint.h>
 #include "common.h"
 #include "guest.h"
+#include "mmu.h"
 
-// Fills `st` as a regular file with a given size
-void guest_stat_default(struct guest_stat64& st, size_t sz);
+class File;
+struct file_ops {
+	void (File::*stat)(guest_stat& st);
+	void (File::*stat64)(guest_stat64& st);
+	uint32_t (File::*read)(vaddr_t buf_addr, vsize_t len, Mmu& mmu);
+	uint32_t (File::*write)(vaddr_t buf_addr, vsize_t len, Mmu& mmu, bool output);
+};
 
-void guest_stat_stdout(struct guest_stat64& st);
-
+// Interface for stat. Fstat should use the corresponding methods in File class
+void stat_regular_file(guest_stat& st, vsize_t size);
+void stat_stdout_file(guest_stat& st);
+void stat_random_file(guest_stat& st);
+void stat_urandom_file(guest_stat& st);
+void stat64_regular_file(guest_stat64& st, vsize_t size);
+void stat64_stdout_file(guest_stat64& st);
+void stat64_random_file(guest_stat64& st);
+void stat64_urandom_file(guest_stat64& st);
 
 class File {
 public:
@@ -29,14 +42,38 @@ public:
 	// Get size
 	size_t  get_size();
 
-	// Stat
-	void    stat(guest_stat64& st);
-
 	// Flags
 	bool    is_readable();
 	bool    is_writable();
 
+	// Stat, read and write
+	void stat_unimplemented(guest_stat& st);
+	void stat_regular(guest_stat& st);
+	void stat_stdout(guest_stat& st);
+	void stat_random(guest_stat& st);
+	void stat_urandom(guest_stat& st);
+	void stat64_unimplemented(guest_stat64& st);
+	void stat64_regular(guest_stat64& st);
+	void stat64_stdout(guest_stat64& st);
+	void stat64_random(guest_stat64& st);
+	void stat64_urandom(guest_stat64& st);
+	uint32_t read_forbidden(vaddr_t buf_addr, vsize_t len, Mmu& mmu);
+	uint32_t read_regular(vaddr_t buf_addr, vsize_t len, Mmu& mmu);
+	uint32_t read_random(vaddr_t buf_addr, vsize_t len, Mmu& mmu);
+	uint32_t write_forbidden(vaddr_t buf_addr, vsize_t len, Mmu& mmu, bool output);
+	uint32_t write_stdout(vaddr_t buf_addr, vsize_t len, Mmu& mmu, bool output);
+
+	void stat(guest_stat& st);
+	void stat64(guest_stat64& st);
+	uint32_t read (vaddr_t buf_addr, vsize_t len, Mmu& mmu);
+	uint32_t write(vaddr_t buf_addr, vsize_t len, Mmu& mmu, bool output);
+
 	friend std::ostream& operator<<(std::ostream& os, const File& emu);
+
+protected:
+	// Modified by inherited classes. I've done it this way to achieve
+	// polymorphism without dynamic memory allocations
+	file_ops fops;
 
 private:
 	// Flags used when opened
@@ -50,6 +87,31 @@ private:
 
 	// Cursor offset
 	size_t   offset;
+};
+
+class FileStdin : public File {
+public:
+	FileStdin();
+};
+
+class FileStdout : public File {
+public:
+	FileStdout();
+};
+
+class FileStderr : public File {
+public:
+	FileStderr();
+};
+
+class FileRandom : public File {
+public:
+	FileRandom();
+};
+
+class FileUrandom : public File {
+public:
+	FileUrandom();
 };
 
 #endif

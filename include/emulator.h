@@ -48,16 +48,19 @@ public:
 	// Get ELF load address
 	vaddr_t get_load_addr() const;
 
+	void set_loaded_file(const std::string& filename, const std::string& content);
+
 	// Forks the emulator and returns the child
 	Emulator fork() const;
 
 	// Resets the emulator to the parent it was previously forked from
 	void reset(const Emulator& other);
 
-	// Run the emulator with provided input
-	void run(const std::string& input, cov_t& cov, Stats& local_stats);
+	// Perform single run until exit, fault or timeout
+	void run(cov_t& cov, Stats& local_stats);
 
-	// Run the emulator loading the input from given file
+	// Run the emulator loading the `filepath` contents as a file
+	// named 'input_file', handling fault and timeout
 	void run_file(const std::string& filepath);
 
 	// Run emulator until given address, return the number of instructions
@@ -103,12 +106,12 @@ private:
 	// Is the emulator running?
 	bool      running;
 
-	// Current input and size
-	const char* input;
-	size_t      input_sz;
-
-	// Open files appart from stdin, stdout and stderr
+	// Open files, indexed by file descriptor
 	std::unordered_map<int, File> open_files;
+
+	// Memory loaded files. Key is filename, value is buffer and size.
+	// Buffers are shared among threads
+	std::unordered_map<std::string, std::pair<const char*, size_t>> loaded_files;
 
 	// Elf parser
 	Elf_parser elf;
@@ -156,6 +159,10 @@ private:
 	                  uint32_t& error);
 	uint32_t sys_write(uint32_t fd, vaddr_t buf_addr, vsize_t count,
 	                   uint32_t& error);
+	uint32_t sys_fstat(uint32_t fd, vaddr_t statbuf_addr,
+	                   uint32_t& error);
+	uint32_t sys_stat(vaddr_t pathname_addr, vaddr_t statbuf_addr,
+	                  uint32_t& error);
 	uint32_t sys_fstat64(uint32_t fd, vaddr_t statbuf_addr,
 	                     uint32_t& error);
 	uint32_t sys_stat64(vaddr_t pathname_addr, vaddr_t statbuf_addr,
@@ -167,6 +174,8 @@ private:
 	uint32_t sys_ioctl(uint32_t fd, uint32_t request, vaddr_t argp,
 	                   uint32_t& error);
 	uint32_t sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& error);
+	uint32_t sys_poll(vaddr_t fds_addr, uint32_t nfds, uint32_t timeout,
+	                  uint32_t& error);
 
 	// Handle syscall and return if program has finished (sys_exit or similar)
 	bool handle_syscall(uint32_t syscall);
@@ -180,15 +189,14 @@ private:
 	// Run a single instruction (interpreter)
 	void run_inst(cov_t& cov, Stats& local_stats);
 
-	// Perform run with provided input using the interpreter
-	void run_interpreter(const std::string& input, cov_t& cov,
-	                     Stats& local_stats);
+	// Perform run using the interpreter
+	void run_interpreter(cov_t& cov, Stats& local_stats);
 
 	// Get JIT block associated with given pc
 	JIT::jit_block_t get_jit_block(vaddr_t pc, size_t cov_map_size);
 
-	// Perform run with provided input using the JIT
-	void run_jit(const std::string& input, cov_t& cov, Stats& local_stats);
+	// Perform run using the JIT
+	void run_jit(cov_t& cov, Stats& local_stats);
 
 	void dump(bool dump_pc, bool dump_regs) const;
 	void dump_os(std::ostream& os, bool dump_pc, bool dump_regs) const;

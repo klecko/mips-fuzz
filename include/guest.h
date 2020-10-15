@@ -23,6 +23,34 @@ struct guest_uname {
 #undef st_mtime
 #undef st_ctime
 
+struct guest_stat {
+    uint32_t st_dev;
+    uint32_t st_pad1[3];
+
+    uint32_t st_ino;
+
+    uint32_t st_mode;
+    uint32_t st_nlink;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint32_t st_rdev;
+    uint32_t st_pad2[2];
+    uint32_t st_size;
+    uint32_t st_pad3;
+
+    uint32_t st_atime;
+    uint32_t st_atime_nsec;
+    uint32_t st_mtime;
+    uint32_t st_mtime_nsec;
+    uint32_t st_ctime;
+    uint32_t st_ctime_nsec;
+
+    uint32_t st_blksize;
+    uint32_t st_blocks;
+
+    uint32_t st_pad5[14];
+};
+
 struct guest_stat64 {
     uint32_t st_dev;
     uint32_t st_pad0[3]; /* Reserved for st_dev expansion  */
@@ -57,6 +85,14 @@ struct guest_stat64 {
     uint32_t st_pad2;
 
     int64_t  st_blocks;
+
+    uint32_t st_pad4[14];
+};
+
+struct guest_pollfd {
+    int   fd;
+    short events;
+    short revents;
 };
 
 #endif
