@@ -61,8 +61,9 @@ public:
 	vsize_t get_alloc_size(vaddr_t addr);
 
 	// Allocates a block of `size` bytes. Default perms are RW
-	vaddr_t alloc(vsize_t size);
+	vaddr_t alloc(vsize_t size, uint8_t perm=PERM_READ|PERM_WRITE);
 
+	// Frees a memory block previously allocated by `alloc`
 	void free(vaddr_t addr);
 
 	// Allocates a stack at the end of the guest memory space

@@ -17,7 +17,11 @@ struct RunTimeout : std::exception {};
 
 class Emulator {
 public:
+	// Emulator options
 	EmuOptions options;
+
+	// Memory
+	Mmu mmu;
 
 	Emulator(vsize_t mem_size, const std::string& filepath,
 	         const std::vector<std::string>& argv);
@@ -76,9 +80,6 @@ private:
 
 	// Interpreter instruction handler
 	typedef void (Emulator::*const inst_handler_t)(uint32_t);
-
-	// Memory
-	Mmu mmu;
 
 	// Registers. JIT assumes `hi`, `lo` and `pc` are just after `regs`
 	uint32_t  regs[NUM_REGS];
@@ -149,9 +150,9 @@ private:
 	                    uint32_t& error);
 	uint32_t sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
 	                    uint32_t& error);
-	vaddr_t sys_mmap2(vaddr_t addr, vsize_t length, uint32_t prot,
-	                  uint32_t flags, uint32_t fd, uint32_t pgoffset,
-	                  uint32_t& error);
+	vaddr_t  sys_mmap2(vaddr_t addr, vsize_t length, uint32_t prot,
+	                   uint32_t flags, int32_t fd, uint32_t pgoffset,
+	                   uint32_t& error);
 	uint32_t sys_uname(vaddr_t addr, uint32_t& error);
 	uint32_t sys_readlink(vaddr_t path_addr, vaddr_t buf_addr,
 	                      vsize_t bufsize, uint32_t& error);

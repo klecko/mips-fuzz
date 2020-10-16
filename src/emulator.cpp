@@ -216,12 +216,12 @@ void Emulator::set_bps(){
 	breakpoints.set_bp_sym("__libc_valloc", &Emulator::valloc_bp, true);
 	breakpoints.set_bp_sym("pvalloc", &Emulator::pvalloc_bp, true);
 	breakpoints.set_bp_sym("__calloc", &Emulator::calloc_bp, true);
-	breakpoints.set_bp_sym("memcpy", &Emulator::memcpy_bp, true);
-	breakpoints.set_bp_sym("memset", &Emulator::memset_bp, true);
+	/* breakpoints.set_bp_sym("memcpy", &Emulator::memcpy_bp, true);
+	breakpoints.set_bp_sym("memset", &Emulator::memset_bp, true); */
 	/* breakpoints.set_bp_sym("strcmp", &Emulator::strcmp_bp, true);
 	breakpoints.set_bp_sym("strlen", &Emulator::strlen_bp, true);
 	breakpoints.set_bp_sym("strnlen", &Emulator::strnlen_bp, true); */
-	//breakpoints.set_bp_addr("test", 0x400ab8, &Emulator::test_bp, false);
+	//breakpoints.set_bp_addr("test", 0x45ff50, &Emulator::test_bp, false);
 }
 
 void check_repeated_cov_id(uint32_t cov_id, vaddr_t from, vaddr_t to){
@@ -287,6 +287,7 @@ void Emulator::run_inst(cov_t& cov, Stats& local_stats){
 	cycle_t cycles = rdtsc2(); // bp_cycles
 	bp_handler_t bp = breakpoints.get_bp(pc);
 	if (bp){
+		prev_pc = pc;
 		vaddr_t pc_bf_bp = pc; // pc before breakpoint
 		(this->*bp)();
 		if (pc != pc_bf_bp)    // pc changed
@@ -601,12 +602,12 @@ void Emulator::memcpy_bp(){
 	vaddr_t dst = regs[Reg::a0];
 	vaddr_t src = regs[Reg::a1];
 	vsize_t len = regs[Reg::a2];
+	dbgprintf("memcpy(0x%X, 0x%X, %u)\n", dst, src, len);
 	mmu.copy_mem(dst, src, len);
 
 	regs[Reg::v0] = dst;
 	prev_pc = pc;
 	pc      = regs[Reg::ra];
-	dbgprintf("memcpy(0x%X, 0x%X, %u)\n", dst, src, len);
 }
 
 void Emulator::memset_bp(){
@@ -735,13 +736,25 @@ uint32_t Emulator::sys_writev(int32_t fd, vaddr_t iov_addr, int32_t iovcnt,
 }
 
 vaddr_t Emulator::sys_mmap2(vaddr_t addr, vsize_t length, uint32_t prot,
-                            uint32_t flags, uint32_t fd, uint32_t pgoffset,
+                            uint32_t flags, int32_t fd, uint32_t pgoffset,
                             uint32_t& error)
 {
-	cout << *this;
-	die("mmap2(0x%X, 0x%X, 0x%X, 0x%X, %d, 0x%X)\n", addr, length, prot,
-	    flags, fd, pgoffset);
-	return 0;
+	dbgprintf("mmap2(0x%X, 0x%X, 0x%X, 0x%X, %d, 0x%X)", addr, length, prot,
+	          flags, fd, pgoffset);
+	if (addr != 0 || (length & 0xFFF) != 0 || fd != -1 || pgoffset != 0 ||
+	    ((flags & G_MAP_TYPE) != G_MAP_PRIVATE) ||
+	    !(flags & G_MAP_ANONYMOUS) || (flags & G_MAP_FIXED))
+	{
+		cout << *this;
+		die("unimplemented mmap2\n");
+	}
+	//breakpoints.set_bp_addr("ASDF", 0x579eb0, &Emulator::test_bp, true);
+
+	// We're doing a private anonymous mmap: just do an allocation
+	vaddr_t ret = mmu.alloc(length, prot);
+	dbgprintf("--> 0x%X\n", ret);
+	error = 0;
+	return ret;
 }
 
 uint32_t Emulator::sys_uname(vaddr_t addr, uint32_t& error){
@@ -1079,6 +1092,12 @@ bool Emulator::handle_syscall(uint32_t syscall){
 			);
 			break;
 
+		case 4195: // sigprocmask
+			printf("Warning: unimplemented sigprocmask\n");
+			regs[Reg::v0] = 0;
+			regs[Reg::a3] = 0;
+			break;
+
 		case 4210: // mmap2
 			regs[Reg::v0] = sys_mmap2(
 				regs[Reg::a0],
@@ -1099,6 +1118,11 @@ bool Emulator::handle_syscall(uint32_t syscall){
 		case 4215: // fstat64
 			regs[Reg::v0] =
 				sys_fstat64(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
+			break;
+
+		case 4222: // gettid
+			regs[Reg::v0] = 1337;
+			regs[Reg::a3] = 0;
 			break;
 
 		case 4283: // set_thread_area

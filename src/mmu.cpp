@@ -320,7 +320,7 @@ vsize_t Mmu::get_alloc_size(vaddr_t addr){
 	return cur_allocs[addr].size;
 }
 
-vaddr_t Mmu::alloc(vsize_t size){
+vaddr_t Mmu::alloc(vsize_t size, uint8_t perm){
 	// Fast path for empty allocations
 	if (size == 0)
 		return 0;
@@ -338,8 +338,9 @@ vaddr_t Mmu::alloc(vsize_t size){
 	vsize_t aligned_size  = (size + 0xF) & ~0xF;
 	vaddr_t current_alloc = next_alloc;
 
-	// Memory is by default readable and writable, but not initialized
-	set_perms(current_alloc, size, PERM_READ|PERM_WRITE);
+	// Set permissions. Memory is by default readable and writable,
+	// but not initialized
+	set_perms(current_alloc, size, perm);
 
 	// Functions like strcmp expect to read OOB...
 	set_perms(current_alloc + size, aligned_size - size, PERM_READ);

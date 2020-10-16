@@ -1432,6 +1432,9 @@ bool Jitter::inst_fmt_d(vaddr_t pc, uint32_t val){
 			setd_reg(inst.d,
 			         builder.CreateFDiv(getd_reg(inst.s), getd_reg(inst.t)));
 			break;
+		case 0b000110: // mov.d
+			setd_reg(inst.d, getd_reg(inst.s));
+			break;
 		case 0b001101: // trunc.w.d
 			// Convert double to u32, then use `as_float` to use `sets_reg`
 			sets_reg(inst.d,
@@ -1454,7 +1457,7 @@ bool Jitter::inst_fmt_d(vaddr_t pc, uint32_t val){
 			sets_reg(inst.d, builder.CreateFPTrunc(getd_reg(inst.s), float_ty));
 			break;
 		default:
-			die("Unimplemented fmt s at 0x%X\n", pc-4);
+			die("Unimplemented fmt d at 0x%X\n", pc-4);
 	}
 	return false;
 }

@@ -585,8 +585,10 @@ void Corpus::splice_overwrite(std::string& input, Rng& rng){
 	if (input.empty())
 		return;
 
-	// Get the random input we'll copy from
+	// Get the random input we'll copy from and check it is not empty
 	const string& inp = corpus[rng.rnd(0, corpus.size()-1)];
+	if (inp.empty())
+		return;
 
 	// Get dst and src offsets and lengths, making sure we don't exceed
 	// max_input_size when replacing
@@ -605,8 +607,10 @@ void Corpus::splice_insert(std::string& input, Rng& rng){
 	if (input.size() >= max_input_size)
 		return;
 
-	// Get the random input we'll copy from
+	// Get the random input we'll copy from and check it is not empty
 	const string& inp = corpus[rng.rnd(0, corpus.size()-1)];
+	if (inp.empty())
+		return;
 
 	// Get dst and src offsets and src length, making sure we don't exceed
 	// max_input_size when inserting

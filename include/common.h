@@ -6,7 +6,7 @@
 #include <vector>
 #include <assert.h>
 
-#define DEBUG 1
+#define DEBUG 0
 
 // Type used for guest virtual addresses
 typedef uint32_t vaddr_t;

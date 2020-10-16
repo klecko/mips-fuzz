@@ -4,6 +4,15 @@
 #include <cstdint>
 #include "common.h"
 
+#define G_MAP_SHARED          0x01
+#define G_MAP_PRIVATE         0x02
+#define G_MAP_SHARED_VALIDATE 0x03
+#define G_MAP_TYPE            0x0F
+#define G_MAP_FIXED           0x10
+#define G_MAP_ANONYMOUS       0x0800
+#define G_MAP_ANON            G_MAP_ANONYMOUS
+
+
 struct guest_iovec {
 	vaddr_t iov_base;
 	vsize_t iov_len;
