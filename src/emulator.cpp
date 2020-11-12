@@ -969,6 +969,13 @@ uint32_t Emulator::sys_poll(vaddr_t fds_addr, uint32_t nfds, uint32_t timeout,
 	return 1;
 }
 
+uint32_t Emulator::sys_sysinfo(vaddr_t info_addr, uint32_t& error){
+	struct guest_sysinfo sysinfo = default_guest_sysinfo();
+	mmu.write_mem(info_addr, &sysinfo, sizeof(sysinfo));
+	error = 0;
+	return 0;
+}
+
 
 bool Emulator::handle_syscall(uint32_t syscall){
 	//cout << *this << endl;
@@ -1057,6 +1064,10 @@ bool Emulator::handle_syscall(uint32_t syscall){
 		case 4108: // fstat
 			regs[Reg::v0] =
 				sys_fstat(regs[Reg::a0], regs[Reg::a1], regs[Reg::a3]);
+			break;
+
+		case 4116: // sysinfo
+			regs[Reg::v0] = sys_sysinfo(regs[Reg::a0], regs[Reg::a3]);
 			break;
 
 		case 4122: // uname

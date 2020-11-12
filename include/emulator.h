@@ -177,6 +177,7 @@ private:
 	uint32_t sys_access(vaddr_t pathname_addr, uint32_t mode, uint32_t& error);
 	uint32_t sys_poll(vaddr_t fds_addr, uint32_t nfds, uint32_t timeout,
 	                  uint32_t& error);
+	uint32_t sys_sysinfo(vaddr_t info_addr, uint32_t& error);
 
 	// Handle syscall and return if program has finished (sys_exit or similar)
 	bool handle_syscall(uint32_t syscall);

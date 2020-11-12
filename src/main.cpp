@@ -177,28 +177,18 @@ int main(){
 
 	// Create shared objects
 	Stats stats;
-	Corpus corpus(num_threads, "../corpus");
+	Corpus corpus(num_threads, "../../corpus");
 	Emulator emu(
-		8 * 1024 * 1024,                // memory
-		/* "../test_bins/readelf",         // path to elf
-		{"readelf", "-e", "input_file"} // argv */
-		"../test_bins/openssl-1.0.1f/target",         // path to elf
-		{"target"} // argv
+		16 * 1024 * 1024,        // memory
+		"../../harness/harness", // path to elf
+		{"harness"}              // argv
 	);
-
-	// Loaded files for openssl
-	vector<string> files = {
-		load_file("../test_bins/openssl-1.0.1f/runtime/server.key"),
-		load_file("../test_bins/openssl-1.0.1f/runtime/server.pem")
-	};
-	emu.set_loaded_file("runtime/server.key", files[0]);
-	emu.set_loaded_file("runtime/server.pem", files[1]);
 
 	JIT::jit_cache_t jit_cache((emu.memsize() - emu.get_load_addr())/4);
 	//jit_cache.set_empty_key(0);
 
 	emu.options.jit_cache    = &jit_cache;
-	emu.options.guest_output = true;
+	emu.options.guest_output = false;
 	emu.options.coverage     = true;
 	emu.options.dump_pc      = false;
 	emu.options.dump_regs    = false;
@@ -217,7 +207,7 @@ int main(){
 	// readelf:    0x004c081c
 	// stegdetect: 0x0045d40c
 	try {
-		uint64_t insts = emu.run_until(0x400ab8);//0x00423ec8);
+		uint64_t insts = emu.run_until(0x400870);//0x00423ec8);
 		cout << "Executed " << insts << " instructions before forking" << endl;
 	} catch (const Fault& f) {
 		cout << "Unexpected fault running before forking" << endl;
