@@ -226,6 +226,8 @@ void Elf_parser::load_memory_map() {
     Elf32_Ehdr* header = (Elf32_Ehdr*)m_mmap_program;
     if (header->e_ident[EI_CLASS] != ELFCLASS32)
         die("elf_parser: this is not an ELF32\n");
+    if (header->e_machine != EM_MIPS)
+        die("elf_parser: this is not a MIPS LE\n");
 }
 
 std::string Elf_parser::get_section_type(Elf32_Word tt) const {
