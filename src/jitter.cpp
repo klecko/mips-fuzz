@@ -148,7 +148,7 @@ Jitter::Jitter(vaddr_t pc, const Mmu& mmu, size_t cov_map_size,
 
 	if (TMP_REGS){
 		// Allocate stack for each reg
-		for (int i = 0; i < NUM_REGS+3; i++)
+		for (int i = 0; i < JIT_NUM_REGS; i++)
 			p_regs[i] = builder.CreateAlloca(int32_ty);
 	}
 
@@ -374,7 +374,8 @@ llvm::Value* Jitter::get_state_field(uint8_t field, const string& name){
 }
 
 llvm::Value* Jitter::get_preg(uint8_t reg){
-	// Get pointer to regs[reg]. No checks, be careful!
+	// Get pointer to regs[reg]
+	assert(0 <= reg && reg <= JIT_NUM_REGS);
 	llvm::Value* p_reg;
 	if (TMP_REGS){
 		p_reg = p_regs[reg];
@@ -389,7 +390,8 @@ llvm::Value* Jitter::get_preg(uint8_t reg){
 }
 
 llvm::Value* Jitter::gets_preg(uint8_t reg){
-	// Get pointer to fpregs[reg] as float. No checks, be careful!
+	// Get pointer to fpregs[reg] as float
+	assert(0 <= reg && reg <= NUM_FP_REGS);
 	llvm::Value* p_fpreg = builder.CreateInBoundsGEP(
 		state.p_fpregs,
 		builder.getInt32(reg),
@@ -399,14 +401,13 @@ llvm::Value* Jitter::gets_preg(uint8_t reg){
 }
 
 llvm::Value* Jitter::getd_preg(uint8_t reg){
-	// Get pointer to fpregs[reg] as double. No checks, be careful!
+	// Get pointer to fpregs[reg] as double
 	llvm::Value* p_fpreg = gets_preg(reg);
 	return builder.CreateBitCast(p_fpreg, doubleptr_ty);
 }
 
 llvm::Value* Jitter::get_reg(uint8_t reg){
-	// Get pointer to reg and load it. Allow getting hi, lo and pc too (+3).
-	assert(0 <= reg && reg < NUM_REGS+3);
+	// Get pointer to reg and load it. Allow getting hi, lo and pc too
 	llvm::Value* reg_val;
 	if (reg == 0)
 		reg_val = builder.getInt32(0);
@@ -419,8 +420,7 @@ llvm::Value* Jitter::get_reg(uint8_t reg){
 }
 
 void Jitter::set_reg(uint8_t reg, llvm::Value* val){
-	// Get pointer to reg and write val. Allow setting hi, lo and pc too (+3).
-	assert(0 <= reg && reg < NUM_REGS+3);
+	// Get pointer to reg and write val. Allow setting hi, lo and pc too
 	llvm::Value* val_zext = builder.CreateZExt(val, int32_ty);
 	if (reg != 0){
 		llvm::Value* p_reg = get_preg(reg);
@@ -863,13 +863,13 @@ void Jitter::save_reg(uint8_t reg){
 }
 
 void Jitter::load_regs(){
-	for (int i = 0; i < NUM_REGS+3; i++)
+	for (int i = 0; i < JIT_NUM_REGS; i++)
 		if (must_be_loaded[i])
 			load_reg(i);
 }
 
 void Jitter::save_regs(){
-	for (int i = 0; i < NUM_REGS+3; i++)
+	for (int i = 0; i < JIT_NUM_REGS; i++)
 		if (must_be_saved[builder.GetInsertBlock()][i])
 			save_reg(i);
 }
@@ -878,7 +878,7 @@ void Jitter::save_regs(){
 // If block == succ, add dirty registers of `block` to all of its successors
 void Jitter::join_must_be_saved(llvm::BasicBlock* block, llvm::BasicBlock* succ){
 	// Join block dirty registers to succ dirty registers
-	for (int i = 0; i < NUM_REGS+3; i++)
+	for (int i = 0; i < JIT_NUM_REGS; i++)
 		if (must_be_saved[block][i])
 			must_be_saved[succ][i] = true;
 

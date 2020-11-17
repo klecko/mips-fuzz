@@ -28,7 +28,7 @@ public:
 
 	vsize_t memsize() const;
 
-	// Get or set a general purpose register
+	// Get or set a general purpose register, including hi and lo
 	uint32_t get_reg(uint8_t reg) const;
 	void set_reg(uint8_t reg, uint32_t val);
 
@@ -81,14 +81,13 @@ private:
 	// Interpreter instruction handler
 	typedef void (Emulator::*const inst_handler_t)(uint32_t);
 
-	// Registers. JIT assumes `hi`, `lo` and `pc` are just after `regs`
+	// Registers, including hi and lo. JIT assumes `pc` is just after `regs`
 	uint32_t  regs[NUM_REGS];
-	uint32_t  hi, lo;
 	vaddr_t   pc;
 	vaddr_t   prev_pc;
 
 	// FPU registers and condition codes
-	float     fpregs[NUM_REGS];
+	float     fpregs[NUM_FP_REGS];
 	uint8_t   ccs;
 
 	// Handling of branches. If condition is true, pc must be updated to

@@ -16,14 +16,16 @@
 #define INTEGRATED_CALLS 0
 #define DETAILED_FAULT 1
 
-// Jitter will use hacky registers, so it will use NUM_REGS+3
-const int NUM_REGS = 32;
+// Jitter will access pc has a hacky register, so it will use NUM_REGS+1
+const int NUM_REGS = 34;
+const int JIT_NUM_REGS = NUM_REGS + 1;
+const int NUM_FP_REGS = 32;
 enum Reg {
 	zero, at, v0, v1, a0, a1, a2, a3,
 	t0,   t1, t2, t3, t4, t5, t6, t7,
 	s0,   s1, s2, s3, s4, s5, s6, s7,
 	t8,   t9, k0, k1, gp, sp, fp, ra,
-	hi,   lo, pc // hacky registers
+	hi,   lo, pc
 };
 
 struct EmuOptions;

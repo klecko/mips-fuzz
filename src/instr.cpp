@@ -536,8 +536,8 @@ void Emulator::inst_div(uint32_t val){
 	inst_R_t inst(val);
 	int32_t dividend  = get_reg(inst.s);
 	int32_t divisor   = get_reg(inst.t);
-	hi = dividend % divisor; // module
-	lo = dividend / divisor; // quotient
+	set_reg(Reg::hi, dividend % divisor); // module
+	set_reg(Reg::lo, dividend / divisor); // quotient
 }
 
 
@@ -545,13 +545,13 @@ void Emulator::inst_divu(uint32_t val){
 	inst_R_t inst(val);
 	uint32_t dividend  = get_reg(inst.s);
 	uint32_t divisor   = get_reg(inst.t);
-	hi = dividend % divisor; // module
-	lo = dividend / divisor; // quotient
+	set_reg(Reg::hi, dividend % divisor); // module
+	set_reg(Reg::lo, dividend / divisor); // quotient
 }
 
 void Emulator::inst_mflo(uint32_t val){
 	inst_R_t inst(val);
-	set_reg(inst.d, lo);
+	set_reg(inst.d, get_reg(Reg::lo));
 }
 
 void Emulator::inst_mul(uint32_t val){
@@ -826,30 +826,30 @@ void Emulator::inst_bgtz(uint32_t val){
 void Emulator::inst_mult(uint32_t val){
 	inst_R_t inst(val);
 	uint64_t result = (int32_t)get_reg(inst.s) * (int32_t)get_reg(inst.t);
-	lo = result & 0xFFFFFFFF;
-	hi = (result >> 32) & 0xFFFFFFFF;
+	set_reg(Reg::lo, result & 0xFFFFFFFF);
+	set_reg(Reg::hi, (result >> 32) & 0xFFFFFFFF);
 }
 
 void Emulator::inst_multu(uint32_t val){
 	inst_R_t inst(val);
 	uint64_t result = (uint64_t)get_reg(inst.s) * get_reg(inst.t);
-	lo = result & 0xFFFFFFFF;
-	hi = (result >> 32) & 0xFFFFFFFF;
+	set_reg(Reg::lo, result & 0xFFFFFFFF);
+	set_reg(Reg::hi, (result >> 32) & 0xFFFFFFFF);
 }
 
 void Emulator::inst_mfhi(uint32_t val){
 	inst_R_t inst(val);
-	set_reg(inst.d, hi);
+	set_reg(inst.d, get_reg(Reg::hi));
 }
 
 void Emulator::inst_mthi(uint32_t val){
 	inst_R_t inst(val);
-	hi = get_reg(inst.s);
+	set_reg(Reg::hi, get_reg(inst.s));
 }
 
 void Emulator::inst_mtlo(uint32_t val){
 	inst_R_t inst(val);
-	lo = get_reg(inst.s);
+	set_reg(Reg::lo, get_reg(inst.s));
 }
 
 void Emulator::inst_ext(uint32_t val){

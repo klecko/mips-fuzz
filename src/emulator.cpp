@@ -36,8 +36,6 @@ Emulator::Emulator(vsize_t mem_size, const string& filepath,
 	breakpoints(mem_size, elf.get_symbols())
 {
 	memset(regs, 0, sizeof(regs));
-	hi        = 0;
-	lo        = 0;
 	pc        = 0;
 	prev_pc   = 0;
 	memset(fpregs, 0, sizeof(fpregs));
@@ -130,8 +128,6 @@ Emulator Emulator::fork() const {
 void Emulator::reset(const Emulator& other){
 	mmu.reset(other.mmu);
 	memcpy(regs, other.regs, sizeof(regs));
-	hi         = other.hi;
-	lo         = other.lo;
 	pc         = other.pc;
 	prev_pc    = other.prev_pc;
 	memcpy(fpregs, other.fpregs, sizeof(fpregs));
@@ -1204,10 +1200,9 @@ void Emulator::dump_os(ostream& os, bool dump_pc, bool dump_regs) const {
 			if ((i+1)%8 == 0)
 				os << endl;
 		}
-		os << "$hi: " << setw(8) << hi << "\t$lo: " << setw(8) << lo << endl;
 
-		os << dec;
-		for (int i = 0; i < NUM_REGS; i++){
+		os << endl << dec;
+		for (int i = 0; i < NUM_FP_REGS; i++){
 			os << "$f" << setw(2) << i << ": " << fpregs[i] << "\t";
 			if ((i+1)%8 == 0)
 				os << endl;

@@ -1256,13 +1256,13 @@ bool Jitter::inst_mfhi(vaddr_t pc, uint32_t val){
 
 bool Jitter::inst_mthi(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	set_reg(Reg::hi, get_reg(inst.d));
+	set_reg(Reg::hi, get_reg(inst.s));
 	return false;
 }
 
 bool Jitter::inst_mtlo(vaddr_t pc, uint32_t val){
 	inst_R_t inst(val);
-	set_reg(Reg::lo, get_reg(inst.d));
+	set_reg(Reg::lo, get_reg(inst.s));
 	return false;
 }
 
